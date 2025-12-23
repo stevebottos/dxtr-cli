@@ -1,0 +1,13 @@
+[project]
+name = "dxtr-cli"
+version = "0.1.0"
+description = "A personalized ML research assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface-hub>=1.2.3",
+    "ollama>=0.6.1",
+]
+
+[project.scripts]
+dxtr = "dxtr.cli:main"
