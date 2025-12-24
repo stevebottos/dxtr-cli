@@ -38,7 +38,7 @@ def _extract_and_explore_links(profile_content: str) -> str:
     for url in urls:
         # Route to appropriate explorer
         if 'github.com' in url:
-            summary = github_explorer.explore(url)
+            summary = github_explorer.explore(url, user_profile_md=profile_content)
         else:
             summary = website_explorer.explore(url)
 
