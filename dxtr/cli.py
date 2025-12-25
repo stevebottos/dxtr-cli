@@ -43,20 +43,24 @@ def _load_user_context():
                     if "repos" in path_parts:
                         idx = path_parts.index("repos")
                         if idx + 2 < len(path_parts):
-                            repo = f"{path_parts[idx+1]}/{path_parts[idx+2]}"
-                            rel_file = "/".join(path_parts[idx+3:])
+                            repo = f"{path_parts[idx + 1]}/{path_parts[idx + 2]}"
+                            rel_file = "/".join(path_parts[idx + 3 :])
 
                             # Build keyword index
                             for keyword in keywords:
-                                keyword_to_files[keyword.lower()].append(f"{repo}/{rel_file}")
+                                keyword_to_files[keyword.lower()].append(
+                                    f"{repo}/{rel_file}"
+                                )
 
                             # Store file summaries by repo
                             if summary:
-                                repo_summaries[repo].append({
-                                    "file": rel_file,
-                                    "summary": summary,
-                                    "keywords": keywords
-                                })
+                                repo_summaries[repo].append(
+                                    {
+                                        "file": rel_file,
+                                        "summary": summary,
+                                        "keywords": keywords,
+                                    }
+                                )
 
                 except json.JSONDecodeError:
                     continue
@@ -71,9 +75,7 @@ def _load_user_context():
 
                 # Sort keywords by frequency
                 sorted_keywords = sorted(
-                    keyword_to_files.items(),
-                    key=lambda x: len(x[1]),
-                    reverse=True
+                    keyword_to_files.items(), key=lambda x: len(x[1]), reverse=True
                 )[:50]  # Top 50 most common keywords
 
                 for keyword, files in sorted_keywords:
@@ -85,8 +87,12 @@ def _load_user_context():
 
                 for repo, files in sorted(repo_summaries.items()):
                     context_parts.append(f"\n### {repo}\n")
-                    for file_info in files[:10]:  # Limit to 10 files per repo to save space
-                        context_parts.append(f"- `{file_info['file']}`: {file_info['summary']}")
+                    for file_info in files[
+                        :10
+                    ]:  # Limit to 10 files per repo to save space
+                        context_parts.append(
+                            f"- `{file_info['file']}`: {file_info['summary']}"
+                        )
 
                     if len(files) > 10:
                         context_parts.append(f"- ... and {len(files) - 10} more files")
@@ -104,11 +110,6 @@ def cmd_chat(args):
     On startup, calls get_user_profile to check/create the profile.
     Then enters the main chat loop.
     """
-    print("=" * 80)
-    print("DXTR - AI Research Assistant")
-    print("=" * 80)
-    print()
-
     # Check for user profile on startup
     profile_path = Path(".dxtr/dxtr_profile.md")
 
@@ -117,7 +118,9 @@ def cmd_chat(args):
         result = profile_creation.run()
 
         if result is None:
-            print("\nProfile creation incomplete. Please create profile.md and restart DXTR.\n")
+            print(
+                "\nProfile creation incomplete. Please create profile.md and restart DXTR.\n"
+            )
             return
 
         print("\n" + "=" * 80)
@@ -137,12 +140,7 @@ def cmd_chat(args):
     print("Type '/help' for available commands.\n")
 
     # Main chat loop with user context prepended
-    chat_history = [
-        {
-            "role": "system",
-            "content": user_context
-        }
-    ]
+    chat_history = [{"role": "system", "content": user_context}]
 
     while True:
         try:
@@ -169,12 +167,7 @@ def cmd_chat(args):
 
                 # Reload context with new profile
                 user_context = _load_user_context()
-                chat_history = [
-                    {
-                        "role": "system",
-                        "content": user_context
-                    }
-                ]
+                chat_history = [{"role": "system", "content": user_context}]
                 print("[✓] Context reloaded. Continuing chat...\n")
                 continue
 
@@ -214,9 +207,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # dxtr chat command
-    parser_chat = subparsers.add_parser(
-        "chat", help="Start the DXTR chat interface"
-    )
+    parser_chat = subparsers.add_parser("chat", help="Start the DXTR chat interface")
     parser_chat.set_defaults(func=cmd_chat)
 
     args = parser.parse_args()
