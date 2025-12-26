@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="DXTR Logo" width="200"/>
+</p>
+
 # DXTR
 
 **Status: Work in Progress**
