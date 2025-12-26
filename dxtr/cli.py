@@ -3,8 +3,10 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
-from .agents.main.submodules import profile_creation
-from .agents.main.agent import chat_with_agent
+from ollama import chat
+from .config import config
+from .agents.papers_helper.tools import paper_tools
+from .agents.profile_creator.tools import profile_tools
 
 
 def _load_user_context():
@@ -106,36 +108,26 @@ def _load_user_context():
 def cmd_chat(args):
     """
     Start the main DXTR chat interface.
-
-    On startup, calls get_user_profile to check/create the profile.
-    Then enters the main chat loop.
     """
-    # Check for user profile on startup
     profile_path = Path(".dxtr/dxtr_profile.md")
 
     if not profile_path.exists():
-        print("No user profile found. Starting profile creation...\n")
-        result = profile_creation.run()
-
-        if result is None:
-            print(
-                "\nProfile creation incomplete. Please create profile.md and restart DXTR.\n"
-            )
-            return
-
         print("\n" + "=" * 80)
-        print("Profile created! Starting chat...")
-        print("=" * 80 + "\n")
+        print("NO PROFILE FOUND")
+        print("=" * 80)
+        print("\nTo get started:")
+        print("1. Create a file named 'profile.md' with your information")
+        print("2. Include your GitHub profile URL")
+        print("3. Ask me to create your profile!\n")
+        print("Or type '/profile' to create your profile now.\n")
 
-    # Check profile exists before loading context
-    if not profile_path.exists():
-        print("Error: Profile still not found after creation.\n")
-        return
+    # Load user context if profile exists
+    user_context = ""
+    if profile_path.exists():
+        print("[Loading user context...]")
+        user_context = _load_user_context()
+        print("[✓] Context loaded")
 
-    # Load user context (profile + GitHub analysis)
-    print("[Loading user context...]")
-    user_context = _load_user_context()
-    print("[✓] Context loaded")
     print("Type 'exit' or 'quit' to end the session.")
     print("Type '/help' for available commands.\n")
 
@@ -162,31 +154,92 @@ def cmd_chat(args):
 
             if user_input == "/profile":
                 print("\nStarting profile recreation...\n")
-                profile_creation.run()
-                print("\nProfile updated. Reloading context...\n")
+                result = profile_tools.create_profile()
 
-                # Reload context with new profile
-                user_context = _load_user_context()
-                chat_history = [{"role": "system", "content": user_context}]
-                print("[✓] Context reloaded. Continuing chat...\n")
+                if result.get("success"):
+                    print("\nProfile updated. Reloading context...\n")
+                    user_context = _load_user_context()
+                    chat_history = [{"role": "system", "content": user_context}]
+                    print("[✓] Context reloaded. Continuing chat...\n")
+                else:
+                    print(f"\nError: {result.get('error')}\n")
                 continue
 
             # Add user message to history
             chat_history.append({"role": "user", "content": user_input})
 
-            # Get response from agent
-            print("DXTR: ", end="", flush=True)
-            response_text = ""
+            # Available tools
+            tools = [
+                paper_tools.TOOL_DEFINITION,
+                profile_tools.TOOL_DEFINITION,
+            ]
+            available_functions = {
+                "rank_papers": paper_tools.rank_papers,
+                "create_profile": profile_tools.create_profile,
+            }
 
-            for chunk in chat_with_agent(
+            # Get response from agent with tools
+            main_config = config.get_model_config("main")
+            response = chat(
+                model=main_config.name,
                 messages=chat_history,
-                prompt_name="chat",
-                stream=True,
-            ):
-                if hasattr(chunk.message, "content"):
-                    content = chunk.message.content
-                    response_text += content
-                    print(content, end="", flush=True)
+                tools=tools,
+                options={
+                    "temperature": main_config.temperature,
+                    "num_ctx": main_config.context_window,
+                }
+            )
+
+            # Handle tool calls if any
+            if response.message.tool_calls:
+                chat_history.append(response.message)
+
+                for tool_call in response.message.tool_calls:
+                    function_name = tool_call.function.name
+                    function_args = tool_call.function.arguments
+
+                    if function_name in available_functions:
+                        print(f"\n[Calling {function_name}...]")
+                        function_result = available_functions[function_name](**function_args)
+
+                        # Format tool result for better model understanding
+                        if function_result.get("success"):
+                            if function_name == "rank_papers":
+                                tool_content = f"Successfully ranked papers for {function_result['date']}:\n\n{function_result['ranking']}"
+                            elif function_name == "create_profile":
+                                tool_content = f"Successfully created profile at {function_result['profile_path']}. User context has been updated."
+                                # Reload context after profile creation
+                                user_context = _load_user_context()
+                                chat_history[0] = {"role": "system", "content": user_context}
+                            else:
+                                tool_content = json.dumps(function_result)
+                        else:
+                            tool_content = f"Error: {function_result.get('error', 'Unknown error')}"
+
+                        chat_history.append({
+                            "role": "tool",
+                            "content": tool_content
+                        })
+
+                # Get final response after tool call
+                print("DXTR: ", end="", flush=True)
+                final_response = chat(
+                    model=main_config.name,
+                    messages=chat_history,
+                    options={
+                        "temperature": main_config.temperature,
+                        "num_ctx": main_config.context_window,
+                    }
+                )
+                response_text = final_response.message.content
+                print(response_text)
+            else:
+                # No tool calls, regular response
+                print("DXTR: ", end="", flush=True)
+                response_text = response.message.content
+                print(response_text)
+
+            del main_config
 
             print("\n")
 

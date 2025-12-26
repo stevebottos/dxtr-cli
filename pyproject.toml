@@ -10,5 +10,11 @@ dependencies = [
     "requests>=2.32.5",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.0.0",
+]
+
 [project.scripts]
 dxtr = "dxtr.cli:main"
