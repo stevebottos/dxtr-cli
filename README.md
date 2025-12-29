@@ -1,67 +1,163 @@
-<p align="center">
-  <img src="assets/logo.png" alt="DXTR Logo" width="600"/>
-</p>
+# Docling PDF to Markdown Converter
 
-# DXTR
+Production-grade PDF to Markdown conversion service using Docling, containerized for dependency isolation.
 
-**Status: Work in Progress**
+## Project Structure
 
-DXTR is an AI research assistant for machine learning engineers. It helps you stay current with ML/AI research.
-
-## Features
-
-- Daily paper downloads from HuggingFace's daily papers
-- Personalized paper ranking based on your profile and GitHub activity
-- Multi-agent architecture with specialized agents for different tasks
-- GitHub repository analysis to understand your interests
-- Profile creation and maintenance
-
-## Installation
-
-### Prerequisites
-
-1. **Install Ollama**: https://ollama.ai
-2. **Pull required models**:
-   ```bash
-   ollama pull mistral-nemo
-   ollama pull gemma3:12b
-   ollama pull qwen2.5-coder
-   ```
-
-### Install DXTR
-
-```bash
-pip install -e .
+```
+.
+├── docker/
+│   └── docling/              # Docker build context
+│       ├── Dockerfile        # Multi-stage build
+│       ├── server.py         # FastAPI service
+│       ├── requirements.txt  # Python dependencies
+│       └── .dockerignore     # Build exclusions
+├── docker-compose.yml        # Service orchestration
+├── Makefile                  # Build/deploy commands
+├── main.py                   # Standalone batch converter
+└── test_docling.py           # Service integration examples
 ```
 
-## Usage
+## Quick Start
+
+### 1. Start the Service
 
 ```bash
-# Start interactive chat
-dxtr chat
-
-# Download today's papers
-dxtr download-papers
-
-# Create/update your profile
-dxtr create-profile
+make build  # Build Docker image
+make up     # Start service (runs on http://localhost:8080)
 ```
 
-## Architecture
+### 2. Test the Service
 
-DXTR uses a multi-agent system with specialized agents:
-- **Main Agent**: Orchestrates tasks and handles general chat
-- **Papers Helper**: Ranks and analyzes research papers
-- **Profile Creator**: Builds user profiles from GitHub and manual input
-- **Git Helper**: Analyzes GitHub repositories for insights
-
-All configuration is centralized in `dxtr/config.py`.
-
-## Development
-
-Run tests:
 ```bash
-pytest
+make test   # Run test examples
+```
+
+### 3. Use in Your Code
+
+```python
+import requests
+from pathlib import Path
+
+# Convert a PDF
+with open('paper.pdf', 'rb') as f:
+    response = requests.post(
+        'http://localhost:8080/convert',
+        files={'file': f}
+    )
+
+result = response.json()
+markdown = result['markdown']
+Path('output.md').write_text(markdown)
+```
+
+## Available Commands
+
+```bash
+make build    # Build the Docker image
+make up       # Start the service
+make down     # Stop the service
+make restart  # Restart the service
+make logs     # View service logs
+make health   # Check service health
+make test     # Run test script
+make clean    # Remove containers and images
+make rebuild  # Clean rebuild and restart
+make info     # Show service information
+make help     # Show all commands
+```
+
+## Service Endpoints
+
+- `POST /convert` - Convert PDF to Markdown
+- `GET /health` - Health check
+- `GET /` - Service info
+- `GET /docs` - Interactive API documentation (Swagger)
+
+## Configuration
+
+Settings optimized for arXiv papers (in `docker/docling/server.py`):
+
+```python
+PDF_BACKEND = "pypdfium2"        # Fast, reliable backend
+DO_OCR = False                   # No OCR for text-based PDFs
+DO_TABLE_STRUCTURE = True        # Preserve table formatting
+IMAGES_SCALE = 4.0               # Maximum quality images
+IMAGE_EXPORT_FORMAT = "png"      # Lossless image format
+```
+
+## Standalone Usage (Without Docker)
+
+For batch converting PDFs without the service:
+
+```bash
+python main.py
+```
+
+This processes all PDFs in `2025-12-26/` subfolders using the same quality settings.
+
+## Integration in Other Projects
+
+### Copy the Client Class
+
+See `test_docling.py` for a ready-to-use `DoclingClient` class you can copy to your projects:
+
+```python
+from test_docling import DoclingClient
+
+client = DoclingClient()
+markdown = client.convert_pdf('paper.pdf')
+```
+
+### Direct Requests (No Dependencies)
+
+```python
+import requests
+
+def convert_pdf(pdf_path):
+    with open(pdf_path, 'rb') as f:
+        response = requests.post(
+            'http://localhost:8080/convert',
+            files={'file': f},
+            timeout=300
+        )
+    response.raise_for_status()
+    return response.json()['markdown']
+```
+
+## Why Docker?
+
+This project uses Docker to isolate Docling's dependencies from your main project. This solves dependency conflicts while providing:
+
+- **Clean API** - Simple HTTP interface
+- **Zero conflicts** - Complete isolation from your project's dependencies
+- **Production-ready** - Service can be deployed anywhere
+- **Language agnostic** - Use from any language via HTTP
+
+## Requirements
+
+- Docker and docker-compose
+- Python 3.12+ (for standalone `main.py`)
+- `requests` library (for client usage)
+
+## Troubleshooting
+
+### Service won't start
+```bash
+make logs  # Check error messages
+```
+
+### Port already in use
+Edit `docker-compose.yml` to change port:
+```yaml
+ports:
+  - "8081:8080"  # Use 8081 instead
+```
+
+### Conversion timeout
+Increase timeout in your client code:
+```python
+response = requests.post(..., timeout=600)  # 10 minutes
 ```
 
 ## License
