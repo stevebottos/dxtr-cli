@@ -14,12 +14,19 @@ def extract_pdf(pdf_path, output_path):
     pass
 
 
-def get_daily_papers(output_root):
-    """Fetch daily papers from HuggingFace Hub"""
-    today = datetime.today().strftime("%Y-%m-%d")
-    papers = list(list_daily_papers(date=today))
+def get_daily_papers(output_root, date=None):
+    """
+    Fetch daily papers from HuggingFace Hub
+
+    Args:
+        output_root: Root directory to save papers
+        date: Date string in YYYY-MM-DD format (defaults to today)
+    """
+    if date is None:
+        date = datetime.today().strftime("%Y-%m-%d")
+    papers = list(list_daily_papers(date=date))
     if len(papers):
-        output_dir = output_root / str(today)
+        output_dir = output_root / str(date)
 
         for p in papers:
             params = {"id_list": p.id, "max_results": 1}

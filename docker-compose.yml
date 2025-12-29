@@ -5,6 +5,7 @@ services:
     build:
       context: ./docker/docling
       dockerfile: Dockerfile
+    image: docling-converter
     container_name: docling-converter
     ports:
       - "8080:8080"

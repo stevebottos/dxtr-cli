@@ -3,10 +3,12 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
+from datetime import datetime
 from ollama import chat
 from .config import config
 from .agents.papers_helper.tools import paper_tools
 from .agents.profile_creator.tools import profile_tools
+from .papers_etl import run_etl
 
 
 def _load_user_context():
@@ -103,6 +105,11 @@ def _load_user_context():
             context_parts.append(f"\n\n[Warning: Could not load GitHub analysis: {e}]")
 
     return "\n".join(context_parts)
+
+
+def cmd_get_papers(args):
+    """Get papers command - ETL pipeline for paper retrieval and processing"""
+    run_etl(date=args.date, max_papers=args.max_papers)
 
 
 def cmd_chat(args):
@@ -286,6 +293,25 @@ def main():
     # dxtr chat command
     parser_chat = subparsers.add_parser("chat", help="Start the DXTR chat interface")
     parser_chat.set_defaults(func=cmd_chat)
+
+    # dxtr get-papers command
+    parser_get_papers = subparsers.add_parser(
+        "get-papers",
+        help="Download and process daily papers (starts Docling service automatically)"
+    )
+    parser_get_papers.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Date in YYYY-MM-DD format (default: today)"
+    )
+    parser_get_papers.add_argument(
+        "--max-papers",
+        type=int,
+        default=None,
+        help="Maximum number of papers to process (default: all)"
+    )
+    parser_get_papers.set_defaults(func=cmd_get_papers)
 
     args = parser.parse_args()
 
