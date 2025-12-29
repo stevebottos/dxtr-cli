@@ -7,11 +7,12 @@ from pathlib import Path
 from ..agent import rank_papers as _rank_papers
 
 
-def rank_papers(date: str = None) -> dict:
+def rank_papers(user_query: str, date: str = None) -> dict:
     """
     Rank papers by relevance to the user's profile and interests.
 
     Args:
+        user_query: The original user question/request
         date: Date in YYYY-MM-DD format (default: today)
 
     Returns:
@@ -30,7 +31,7 @@ def rank_papers(date: str = None) -> dict:
         user_context = _load_user_context()
 
         # Call papers_helper agent
-        ranking = _rank_papers(date, user_context)
+        ranking = _rank_papers(date, user_context, user_query)
 
         return {
             "success": True,
@@ -51,16 +52,20 @@ TOOL_DEFINITION = {
     "type": "function",
     "function": {
         "name": "rank_papers",
-        "description": "Rank research papers by relevance to the user's profile and interests. Use this when the user asks to see today's papers, rank papers, or find relevant papers for a specific date.",
+        "description": "Rank research papers by relevance to the user's profile and interests. Use this when the user asks to see today's papers, rank papers, or find relevant papers for a specific date. ALWAYS pass the user's original question so the agent can tailor its response.",
         "parameters": {
             "type": "object",
             "properties": {
+                "user_query": {
+                    "type": "string",
+                    "description": "The user's original question/request (e.g., 'what is today's best paper', 'rank all papers', 'are there papers about transformers')"
+                },
                 "date": {
                     "type": "string",
                     "description": "Date in YYYY-MM-DD format (optional, defaults to today)"
                 }
             },
-            "required": []
+            "required": ["user_query"]
         }
     }
 }

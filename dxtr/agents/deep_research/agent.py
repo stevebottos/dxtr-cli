@@ -25,23 +25,26 @@ class DeepResearchAgent:
         self.model_name = model_config.name
         self.temperature = model_config.temperature
 
-    def analyze_paper(self, paper_id: str, question: str, user_context: str, date: str = None) -> str:
+    def analyze_paper(self, paper_id: str, user_query: str, user_context: str, date: str = None) -> str:
         """
         Answer a question about a research paper using RAG.
 
         Args:
             paper_id: Paper ID (e.g., "2512.12345")
-            question: Question to answer about the paper
+            user_query: The user's original question/request about the paper
             user_context: User profile and interests
             date: Date in YYYY-MM-DD format (optional)
 
         Returns:
             Answer based on paper content and user context
         """
+        print(f"  [Agent] Finding paper {paper_id}...")
         # Find the paper
         paper_dir = self._find_paper(paper_id, date)
         if not paper_dir:
             return f"Paper {paper_id} not found. Make sure it has been downloaded."
+
+        print(f"  [Agent] Found at {paper_dir}")
 
         # Load the persisted index
         index_dir = paper_dir / "paper.index"
@@ -54,21 +57,22 @@ class DeepResearchAgent:
         if metadata_file.exists():
             metadata = json.loads(metadata_file.read_text())
 
+        print(f"  [Agent] Loading index...")
         # Load index and create query engine
         embed_model = OllamaEmbedding(model_name="nomic-embed-text")
         storage_context = StorageContext.from_defaults(persist_dir=str(index_dir))
         index = load_index_from_storage(storage_context, embed_model=embed_model)
 
+        total_chunks = len(index.docstore.docs)
+        print(f"  [Agent] Index loaded ({total_chunks} chunks)")
+
         llm = Ollama(model=self.model_name, request_timeout=120.0, temperature=self.temperature)
-        query_engine = index.as_query_engine(llm=llm, similarity_top_k=3)
+        query_engine = index.as_query_engine(llm=llm, similarity_top_k=3, streaming=True)
 
         # Add user context to the synthesis prompt
         if user_context:
-            paper_info = f"**Paper**: {metadata.get('title', 'Unknown')} ({paper_id})"
-
             qa_template = PromptTemplate(
                 f"{user_context}\n\n"
-                f"{paper_info}\n\n"
                 "-----\n\n"
                 "You are analyzing a research paper with the user's background in mind.\n\n"
                 "Context from the paper:\n"
@@ -80,8 +84,25 @@ class DeepResearchAgent:
             )
             query_engine.update_prompts({"response_synthesizer:text_qa_template": qa_template})
 
-        # Query and return response
-        response = query_engine.query(question)
+        # Query and stream response
+        print(f"  [Agent] Embedding query and retrieving chunks...")
+        response = query_engine.query(user_query)
+
+        print(f"  [Agent] Retrieved {len(response.source_nodes)}/{total_chunks} chunks:")
+        for i, node in enumerate(response.source_nodes, 1):
+            score = node.score if hasattr(node, 'score') else None
+            score_str = f"{score:.3f}" if isinstance(score, float) else "N/A"
+            preview = node.text[:80].replace('\n', ' ')
+            print(f"    {i}. Score {score_str}: {preview}...")
+
+        print(f"  [Agent] Generating answer with {self.model_name}...\n")
+        print(f"[Deep Research Agent]: ", end="", flush=True)
+
+        # Stream response to stdout
+        response.print_response_stream()
+        print("\n")
+
+        # Return full text for context
         return str(response)
 
     def _find_paper(self, paper_id: str, date: str = None) -> Path | None:
@@ -119,7 +140,7 @@ class DeepResearchAgent:
 _agent = DeepResearchAgent()
 
 
-def analyze_paper(paper_id: str, question: str, user_context: str, date: str = None) -> str:
+def analyze_paper(paper_id: str, user_query: str, user_context: str, date: str = None) -> str:
     """
     Answer a question about a research paper using RAG.
 
@@ -127,11 +148,11 @@ def analyze_paper(paper_id: str, question: str, user_context: str, date: str = N
 
     Args:
         paper_id: Paper ID (e.g., "2512.12345")
-        question: Question to answer about the paper
+        user_query: The user's original question/request about the paper
         user_context: User profile and interests
         date: Date in YYYY-MM-DD format (optional)
 
     Returns:
         Answer based on paper content and user context
     """
-    return _agent.analyze_paper(paper_id, question, user_context, date)
+    return _agent.analyze_paper(paper_id, user_query, user_context, date)

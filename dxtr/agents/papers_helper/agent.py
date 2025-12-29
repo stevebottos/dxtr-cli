@@ -63,18 +63,20 @@ class PapersHelperAgent(Agent):
 
         return papers
 
-    def rank_papers(self, date: str, user_context: str) -> str:
+    def rank_papers(self, date: str, user_context: str, user_query: str) -> str:
         """
         Rank papers by relevance to user profile.
 
         Args:
             date: Date string in YYYY-MM-DD format
             user_context: User profile and GitHub analysis context
+            user_query: The original user question/request
 
         Returns:
             Formatted string with ranked papers and reasoning
         """
         print(f"\n[Papers Helper Agent: Ranking papers for {date}]")
+        print(f"  [User query: {user_query}]")
 
         papers = self._load_papers(date)
 
@@ -98,35 +100,40 @@ class PapersHelperAgent(Agent):
 
 ---
 
-# Papers to Rank
+# User's Question
 
-{json.dumps(papers_data, indent=2)}
+"{user_query}"
 
-Rank these papers from 1-5 (where 5 is most relevant) based on the user's profile and interests. For each paper, provide:
-- Relevance score (1-5)
-- Brief reasoning (2-3 sentences explaining why it's relevant or not)
-- **IMPORTANT**: Include a direct quote from the paper's summary/abstract to support your reasoning
+---
 
-Format your response as a ranked list, starting with the most relevant papers."""
+# Papers Available
 
-        print("  [Analyzing papers...]")
+{json.dumps(papers_data, indent=2)}"""
 
-        response = self.chat(
+        print("  [Analyzing papers...]\n")
+        print(f"[Papers Helper Agent]: ", end="", flush=True)
+
+        # Stream the response
+        response_text = ""
+        for chunk in self.chat(
             messages=[{"role": "user", "content": user_prompt}],
-            prompt_name="ranking"
-        )
+            prompt_name="ranking",
+            stream=True
+        ):
+            if hasattr(chunk.message, "content") and chunk.message.content:
+                content = chunk.message.content
+                response_text += content
+                print(content, end="", flush=True)
 
-        result = response.message.content
-        print(f"  [✓] Papers Helper Agent: Ranking complete")
-
-        return result
+        print("\n")
+        return response_text
 
 
 # Global instance for backward compatibility
 _agent = PapersHelperAgent()
 
 
-def rank_papers(date: str, user_context: str, papers_root: Path = None) -> str:
+def rank_papers(date: str, user_context: str, user_query: str, papers_root: Path = None) -> str:
     """
     Rank papers by relevance to user profile.
 
@@ -135,9 +142,10 @@ def rank_papers(date: str, user_context: str, papers_root: Path = None) -> str:
     Args:
         date: Date string in YYYY-MM-DD format
         user_context: User profile and GitHub analysis context
+        user_query: The original user question/request
         papers_root: Ignored (uses config path)
 
     Returns:
         Formatted string with ranked papers and reasoning
     """
-    return _agent.rank_papers(date, user_context)
+    return _agent.rank_papers(date, user_context, user_query)

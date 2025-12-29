@@ -257,24 +257,8 @@ def cmd_chat(args):
                             "content": tool_content
                         })
 
-                # Get final response after tool call (streaming)
-                print("\nDXTR: ", end="", flush=True)
-                response_text = ""
-
-                final_response = chat(
-                    model=main_config.name,
-                    messages=chat_history,
-                    stream=True,
-                    options={
-                        "temperature": main_config.temperature,
-                        "num_ctx": main_config.context_window,
-                    }
-                )
-                for chunk in final_response:
-                    if hasattr(chunk.message, "content") and chunk.message.content:
-                        content = chunk.message.content
-                        response_text += content
-                        print(content, end="", flush=True)
+                # Tool output already streamed - no need for main agent to synthesize
+                print("\n[Tool complete - added to context]\n")
 
             del main_config
 

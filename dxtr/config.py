@@ -58,13 +58,13 @@ class Config:
             ),
             "papers_helper": ModelConfig(
                 name="gemma3:12b",
-                temperature=0.1,
+                temperature=0.0,
                 context_window=16384,
             ),
             "deep_research": ModelConfig(
-                name="nemotron-3-nano",
+                name="gemma3:12b",
                 temperature=0.3,
-                context_window=131072,  # 128k - plenty for full papers (model supports 1M)
+                context_window=16384,
             ),
         }
     )
