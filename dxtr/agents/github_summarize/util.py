@@ -12,7 +12,57 @@ import re
 import shutil
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+
+
+# JSON schema for structured module analysis
+MODULE_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+    },
+    "required": ["keywords", "summary"],
+}
+
+def find_python_files(repo_path: Path, max_files: int = 100) -> list[Path]:
+    """
+    Find all Python files in a repository.
+
+    Args:
+        repo_path: Path to repository
+        max_files: Maximum number of files to analyze
+
+    Returns:
+        List of Python file paths
+    """
+    python_files = []
+
+    # Patterns to exclude
+    exclude_patterns = [
+        "*/test/*",
+        "*/tests/*",
+        "*/__pycache__/*",
+        "*/venv/*",
+        "*/env/*",
+        "*/.venv/*",
+        "*/node_modules/*",
+        "*/.git/*",
+        "*/dist/*",
+        "*/build/*",
+        "*/.pytest_cache/*",
+    ]
+
+    for py_file in repo_path.rglob("*.py"):
+        # Check if file matches any exclude pattern
+        if any(py_file.match(pattern) for pattern in exclude_patterns):
+            continue
+
+        python_files.append(py_file)
+
+        if len(python_files) >= max_files:
+            break
+
+    return sorted(python_files)
 
 
 def is_profile_url(url: str) -> bool:
@@ -27,7 +77,7 @@ def is_profile_url(url: str) -> bool:
     """
     # Profile URLs have format: github.com/username (no additional path)
     # Repo URLs have format: github.com/username/repo
-    pattern = r'github\.com/([^/]+)/?$'
+    pattern = r"github\.com/([^/]+)/?$"
     return bool(re.search(pattern, url))
 
 
@@ -42,22 +92,22 @@ def fetch_profile_html(url: str) -> str | None:
         Raw HTML string or None if failed
     """
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (DXTR Profile Agent)'}
+        headers = {"User-Agent": "Mozilla/5.0 (DXTR Profile Agent)"}
         req = urllib.request.Request(url, headers=headers)
 
         with urllib.request.urlopen(req, timeout=10) as response:
             content_bytes = response.read()
-            content_type = response.headers.get('Content-Type', '')
+            content_type = response.headers.get("Content-Type", "")
 
             # Try to detect encoding
-            encoding = 'utf-8'
-            if 'charset=' in content_type:
-                encoding = content_type.split('charset=')[-1].split(';')[0].strip()
+            encoding = "utf-8"
+            if "charset=" in content_type:
+                encoding = content_type.split("charset=")[-1].split(";")[0].strip()
 
             try:
                 html = content_bytes.decode(encoding)
             except UnicodeDecodeError:
-                html = content_bytes.decode('utf-8', errors='ignore')
+                html = content_bytes.decode("utf-8", errors="ignore")
 
             return html
 
@@ -81,7 +131,9 @@ def extract_pinned_repos(html_content: str) -> list[str]:
     pattern = r'data-hydro-click="[^"]*PINNED_REPO[^"]*"[^>]*href="(/[^/"]+/[^/"]+)"'
 
     # Also try the reverse order (href before data-hydro-click)
-    pattern_reverse = r'href="(/[^/"]+/[^/"]+)"[^>]*data-hydro-click="[^"]*PINNED_REPO[^"]*"'
+    pattern_reverse = (
+        r'href="(/[^/"]+/[^/"]+)"[^>]*data-hydro-click="[^"]*PINNED_REPO[^"]*"'
+    )
 
     repos = []
     seen = set()
@@ -91,7 +143,9 @@ def extract_pinned_repos(html_content: str) -> list[str]:
         matches = re.findall(patt, html_content)
         for match in matches:
             # match is like: /username/repo-name
-            if match not in seen and match.count('/') == 2:  # Ensure it's /owner/repo format
+            if (
+                match not in seen and match.count("/") == 2
+            ):  # Ensure it's /owner/repo format
                 full_url = f"https://github.com{match}"
                 repos.append(full_url)
                 seen.add(match)
@@ -111,8 +165,8 @@ def _parse_repo_url(url: str) -> tuple[str, str] | None:
     """
     # Handle various GitHub URL formats
     patterns = [
-        r'github\.com/([^/]+)/([^/\.]+)',  # https://github.com/owner/repo
-        r'github\.com/([^/]+)/([^/]+)\.git',  # https://github.com/owner/repo.git
+        r"github\.com/([^/]+)/([^/\.]+)",  # https://github.com/owner/repo
+        r"github\.com/([^/]+)/([^/]+)\.git",  # https://github.com/owner/repo.git
     ]
 
     for pattern in patterns:
@@ -120,7 +174,7 @@ def _parse_repo_url(url: str) -> tuple[str, str] | None:
         if match:
             owner, repo = match.groups()
             # Remove .git suffix if present (using removesuffix for Python 3.9+)
-            if repo.endswith('.git'):
+            if repo.endswith(".git"):
                 repo = repo[:-4]
             return owner, repo
 
