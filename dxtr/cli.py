@@ -7,7 +7,8 @@ from datetime import datetime
 from ollama import chat
 from .config import config
 from .agents.papers_helper.tools import paper_tools
-from .agents.profile_creator.tools import profile_tools
+
+# from .agents.profile_creator.tools import profile_tools
 from .agents.deep_research.tools import deep_research_tools
 from .papers_etl import run_etl
 
@@ -53,9 +54,7 @@ def _load_user_context():
 
                             # Build keyword index
                             for keyword in keywords:
-                                keyword_to_files[keyword.lower()].append(
-                                    f"{repo}/{rel_file}"
-                                )
+                                keyword_to_files[keyword.lower()].append(f"{repo}/{rel_file}")
 
                             # Store file summaries by repo
                             if summary:
@@ -81,7 +80,9 @@ def _load_user_context():
                 # Sort keywords by frequency
                 sorted_keywords = sorted(
                     keyword_to_files.items(), key=lambda x: len(x[1]), reverse=True
-                )[:50]  # Top 50 most common keywords
+                )[
+                    :50
+                ]  # Top 50 most common keywords
 
                 for keyword, files in sorted_keywords:
                     file_count = len(set(files))
@@ -92,12 +93,8 @@ def _load_user_context():
 
                 for repo, files in sorted(repo_summaries.items()):
                     context_parts.append(f"\n### {repo}\n")
-                    for file_info in files[
-                        :10
-                    ]:  # Limit to 10 files per repo to save space
-                        context_parts.append(
-                            f"- `{file_info['file']}`: {file_info['summary']}"
-                        )
+                    for file_info in files[:10]:  # Limit to 10 files per repo to save space
+                        context_parts.append(f"- `{file_info['file']}`: {file_info['summary']}")
 
                     if len(files) > 10:
                         context_parts.append(f"- ... and {len(files) - 10} more files")
@@ -203,7 +200,7 @@ def cmd_chat(args):
                 options={
                     "temperature": main_config.temperature,
                     "num_ctx": main_config.context_window,
-                }
+                },
             )
 
             # Stream response and check for tool calls
@@ -222,11 +219,13 @@ def cmd_chat(args):
                 print("\n")  # New line after initial response
 
                 # Add message to history
-                chat_history.append({
-                    "role": "assistant",
-                    "content": response_text,
-                    "tool_calls": tool_calls
-                })
+                chat_history.append(
+                    {
+                        "role": "assistant",
+                        "content": response_text,
+                        "tool_calls": tool_calls,
+                    }
+                )
 
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
@@ -244,7 +243,10 @@ def cmd_chat(args):
                                 tool_content = f"Successfully created profile at {function_result['profile_path']}. User context has been updated."
                                 # Reload context after profile creation
                                 user_context = _load_user_context()
-                                chat_history[0] = {"role": "system", "content": user_context}
+                                chat_history[0] = {
+                                    "role": "system",
+                                    "content": user_context,
+                                }
                             elif function_name == "deep_research":
                                 tool_content = f"Deep research answer for paper {function_result['paper_id']}:\n\n{function_result['answer']}"
                             else:
@@ -252,10 +254,7 @@ def cmd_chat(args):
                         else:
                             tool_content = f"Error: {function_result.get('error', 'Unknown error')}"
 
-                        chat_history.append({
-                            "role": "tool",
-                            "content": tool_content
-                        })
+                        chat_history.append({"role": "tool", "content": tool_content})
 
                 # Tool output already streamed - no need for main agent to synthesize
                 print("\n[Tool complete - added to context]\n")
@@ -275,9 +274,7 @@ def cmd_chat(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="DXTR Agent - AI-powered research assistant"
-    )
+    parser = argparse.ArgumentParser(description="DXTR Agent - AI-powered research assistant")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # dxtr chat command
@@ -287,19 +284,19 @@ def main():
     # dxtr get-papers command
     parser_get_papers = subparsers.add_parser(
         "get-papers",
-        help="Download and process daily papers (starts Docling service automatically)"
+        help="Download and process daily papers (starts Docling service automatically)",
     )
     parser_get_papers.add_argument(
         "--date",
         type=str,
         default=None,
-        help="Date in YYYY-MM-DD format (default: today)"
+        help="Date in YYYY-MM-DD format (default: today)",
     )
     parser_get_papers.add_argument(
         "--max-papers",
         type=int,
         default=None,
-        help="Maximum number of papers to process (default: all)"
+        help="Maximum number of papers to process (default: all)",
     )
     parser_get_papers.set_defaults(func=cmd_get_papers)
 
