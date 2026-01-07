@@ -2,12 +2,108 @@
 Utilities for processing Docling JSON exports
 
 Provides functions to extract lightweight text-only versions from
-full Docling JSON exports (which include bboxes and layout info).
+full Docling JSON exports (which include bboxes and layout info),
+and local functions to run Docling conversion and embedding generation.
 """
 
 import json
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+from io import BytesIO
+
+# Lazy imports for heavy libraries
+_converter = None
+_embed_model = None
+
+
+def _get_converter():
+    """Lazy load Docling converter"""
+    global _converter
+    if _converter is None:
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+        from docling.datamodel.base_models import InputFormat
+
+        # Configuration (optimized for arXiv papers)
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = False  # arXiv papers are text-based PDFs
+        pipeline_options.do_table_structure = True
+        pipeline_options.images_scale = 4.0
+        pipeline_options.generate_page_images = False
+        pipeline_options.generate_picture_images = True
+
+        _converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=pipeline_options,
+                    backend=PyPdfiumDocumentBackend
+                )
+            }
+        )
+    return _converter
+
+
+def get_embed_model():
+    """Lazy load embedding model"""
+    global _embed_model
+    if _embed_model is None:
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        EMBED_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
+        print(f"Loading embedding model: {EMBED_MODEL_NAME}")
+        _embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME, trust_remote_code=True)
+    return _embed_model
+
+
+def convert_pdf_local(pdf_path: Path) -> Dict[str, Any]:
+    """
+    Convert a PDF file to Markdown format using local Docling instance.
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        Dict with 'markdown' and 'docling_json' keys
+    """
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    from docling.datamodel.base_models import DocumentStream
+
+    converter = _get_converter()
+
+    # Convert PDF
+    # We pass the file path directly to convert() which is supported and efficient
+    result = converter.convert(pdf_path)
+
+    # Export to markdown
+    markdown_content = result.document.export_to_markdown()
+
+    # Export to Docling's JSON format
+    docling_json = result.document.export_to_dict()
+
+    return {
+        "markdown": markdown_content,
+        "docling_json": docling_json,
+    }
+
+
+def generate_embeddings_local(texts: List[str]) -> List[List[float]]:
+    """
+    Generate embeddings for a list of text chunks using local model.
+
+    Args:
+        texts: List of text strings to embed
+
+    Returns:
+        List of embedding vectors
+    """
+    if not texts:
+        return []
+
+    model = get_embed_model()
+    embeddings = model.get_text_embedding_batch(texts)
+    return embeddings
 
 
 def extract_text_only(docling_json: Dict[str, Any]) -> Dict[str, Any]:

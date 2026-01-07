@@ -8,7 +8,7 @@ from .config import config
 from .agents.papers_helper.tools import paper_tools
 
 # from .agents.profile_creator.tools import profile_tools
-from .agents.deep_research.tools import deep_research_tools
+from .agents.deep_research import agent as deep_research_agent
 from .papers_etl import run_etl
 
 
@@ -180,12 +180,12 @@ def cmd_chat(args):
             tools = [
                 paper_tools.TOOL_DEFINITION,
                 profile_tools.TOOL_DEFINITION,
-                deep_research_tools.TOOL_DEFINITION,
+                deep_research_agent.TOOL_DEFINITION,
             ]
             available_functions = {
                 "rank_papers": paper_tools.rank_papers,
                 "create_profile": profile_tools.create_profile,
-                "deep_research": deep_research_tools.deep_research,
+                "deep_research": deep_research_agent.deep_research,
             }
 
             # Get response from agent with tools (streaming)

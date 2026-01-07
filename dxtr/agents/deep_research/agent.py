@@ -14,24 +14,76 @@ import json
 import re
 from pathlib import Path
 
+import sglang as sgl
 from llama_index.core import StorageContext, load_index_from_storage
 
-from dxtr.config import config
+from dxtr.agents.base import BaseAgent
+from dxtr.config_v2 import config
+from dxtr.docling_utils import get_embed_model
 
 
-class DeepResearchAgent:
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "deep_research",
+        "description": "Answer questions about a research paper using RAG-based deep analysis.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "paper_id": {
+                    "type": "string",
+                    "description": "Paper ID (e.g., '2512.12345')",
+                },
+                "user_query": {
+                    "type": "string",
+                    "description": "The user's question about the paper",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format (optional)",
+                },
+            },
+            "required": ["paper_id", "user_query"],
+        },
+    },
+}
+
+
+class Agent(BaseAgent):
     """Agent for in-depth research paper analysis using RAG."""
 
     def __init__(self):
         """Initialize deep research agent."""
-        model_config = config.get_model_config("deep_research")
-        self.model_name = model_config.name
-        self.temperature = model_config.temperature
+        super().__init__()
         self.prompts_dir = Path(__file__).parent / "prompts"
+        self.exploration_prompt = self.load_system_prompt(
+            self.prompts_dir / "exploration.md"
+        )
 
-    def analyze_paper(
-        self, paper_id: str, user_query: str, user_context: str, date: str = None
-    ) -> str:
+    @staticmethod
+    @sgl.function
+    def _generate_questions_func(s, system_prompt, user_message, max_tokens, temp):
+        """SGLang function to generate exploration questions."""
+        s += sgl.system(system_prompt)
+        s += sgl.user(user_message)
+        s += sgl.assistant(sgl.gen("questions", max_tokens=max_tokens, temperature=temp))
+
+    @staticmethod
+    @sgl.function
+    def _answer_query_func(s, prompt, max_tokens, temp):
+        """SGLang function to answer user query with retrieved context."""
+        s += sgl.user(prompt)
+        s += sgl.assistant(sgl.gen("answer", max_tokens=max_tokens, temperature=temp))
+
+    def run(
+        self,
+        paper_id: str,
+        user_query: str,
+        user_context: str,
+        date: str = None,
+        papers_dir: Path = None,
+        return_details: bool = False,
+    ) -> str | dict:
         """
         Answer a question about a research paper using agentic RAG.
 
@@ -45,12 +97,14 @@ class DeepResearchAgent:
             user_query: The user's original question/request about the paper
             user_context: User profile and interests
             date: Date in YYYY-MM-DD format (optional)
+            papers_dir: Directory containing papers (optional, defaults to config)
+            return_details: If True, return dict with answer and intermediate data
 
         Returns:
-            Answer based on paper content and user context
+            Answer string, or dict with answer/abstract/chunks if return_details=True
         """
         print(f"  [Agent] Finding paper {paper_id}...")
-        paper_dir = self._find_paper(paper_id, date)
+        paper_dir = self._find_paper(paper_id, date, papers_dir)
         if not paper_dir:
             return f"Paper {paper_id} not found. Make sure it has been downloaded."
 
@@ -66,11 +120,10 @@ class DeepResearchAgent:
         if not index_dir.exists():
             return f"Index not found for paper {paper_id}. Run 'dxtr get-papers' to build it."
 
-        # TODO: Load index created by docker service (needs embed_model for queries)
         print(f"  [Agent] Loading index...")
-        raise NotImplementedError(
-            "Index loading needs embed_model - refactor to use docker service"
-        )
+        storage_context = StorageContext.from_defaults(persist_dir=str(index_dir))
+        index = load_index_from_storage(storage_context, embed_model=get_embed_model())
+
         total_chunks = len(index.docstore.docs)
         print(f"  [Agent] Index loaded ({total_chunks} chunks)")
 
@@ -92,15 +145,19 @@ class DeepResearchAgent:
 
         # STEP 3: Answer user's query with retrieved chunks
         print(f"\n  [Step 3/3] Answering your question...\n")
-        print(f"[Deep Research Agent]: ", end="", flush=True)
-        llm = Ollama(
-            model=self.model_name, request_timeout=120.0, temperature=self.temperature
-        )
         final_answer = self._answer_with_retrieved_chunks(
-            user_query, exploration_questions, all_chunks, user_context, llm
+            user_query, exploration_questions, all_chunks, user_context
         )
 
-        print("\n")
+        if return_details:
+            return {
+                "answer": final_answer,
+                "abstract": abstract,
+                "exploration_questions": exploration_questions,
+                "retrieved_chunks": [node.text for node in all_chunks],
+                "total_chunks": total_chunks,
+            }
+
         return final_answer
 
     def _load_abstract(self, paper_dir: Path) -> str | None:
@@ -126,9 +183,6 @@ class DeepResearchAgent:
         Returns:
             List of exploration questions (3-5 questions)
         """
-        # Load exploration prompt
-        exploration_prompt = (self.prompts_dir / "exploration.md").read_text()
-
         # Build user message
         user_message = f"""# User's Background & Interests
 
@@ -150,20 +204,16 @@ class DeepResearchAgent:
 
 Generate 3-5 targeted exploration questions for this paper."""
 
-        messages = [
-            {"role": "system", "content": exploration_prompt},
-            {"role": "user", "content": user_message},
-        ]
-
-        # Call LLM (non-streaming for parsing)
-        response = chat(
-            model=self.model_name,
-            messages=messages,
-            options={"temperature": self.temperature},
+        # Call SGLang function
+        state = self._generate_questions_func.run(
+            system_prompt=self.exploration_prompt,
+            user_message=user_message,
+            max_tokens=1000,
+            temp=0.3,
         )
 
-        # Parse questions from response
-        questions_text = response.message.content
+        # Parse questions from response (clean think tags first)
+        questions_text = re.sub(r"<think>[\s\S]*?</think>", "", state["questions"]).strip()
         questions = self._parse_questions(questions_text)
 
         # Display questions
@@ -221,7 +271,6 @@ Generate 3-5 targeted exploration questions for this paper."""
         exploration_questions: list[str],
         chunks: list,
         user_context: str,
-        llm,
     ) -> str:
         """
         Answer user's query using chunks retrieved via exploration questions.
@@ -231,7 +280,6 @@ Generate 3-5 targeted exploration questions for this paper."""
             exploration_questions: Questions used for retrieval (for context)
             chunks: Retrieved chunks
             user_context: User profile
-            llm: LLM instance
 
         Returns:
             Answer string
@@ -268,28 +316,32 @@ User's Question: {user_query}
 
 Answer the user's question using the retrieved paper sections above. The exploration questions were just a retrieval strategy - focus on answering the user's actual question. Be specific, cite details from the paper, and tailor your response to the user's background and interests."""
 
-        # Stream answer
-        response = llm.stream_complete(prompt)
-        answer_text = ""
-        for chunk in response:
-            delta = chunk.delta
-            answer_text += delta
-            print(delta, end="", flush=True)
+        # Call SGLang function
+        state = self._answer_query_func.run(
+            prompt=prompt,
+            max_tokens=1500,
+            temp=0.2,
+        )
 
-        return answer_text
+        # Clean think tags from response
+        answer = re.sub(r"<think>[\s\S]*?</think>", "", state["answer"]).strip()
+        return answer
 
-    def _find_paper(self, paper_id: str, date: str = None) -> Path | None:
+    def _find_paper(
+        self, paper_id: str, date: str = None, papers_dir: Path = None
+    ) -> Path | None:
         """
         Find paper directory by ID.
 
         Args:
             paper_id: Paper ID to search for
             date: Optional date to narrow search
+            papers_dir: Directory containing papers (optional, defaults to config)
 
         Returns:
             Path to paper directory or None if not found
         """
-        papers_root = config.paths.papers_dir
+        papers_root = papers_dir if papers_dir else config.paths.papers_dir
 
         if date:
             # Search specific date
@@ -309,17 +361,14 @@ Answer the user's question using the retrieved paper sections above. The explora
         return None
 
 
-# Global instance for backward compatibility
-_agent = DeepResearchAgent()
-
-
+# Convenience function for backward compatibility
 def analyze_paper(
     paper_id: str, user_query: str, user_context: str, date: str = None
 ) -> str:
     """
     Answer a question about a research paper using RAG.
 
-    This is a convenience function that delegates to the agent instance.
+    This is a convenience function that creates an agent instance.
 
     Args:
         paper_id: Paper ID (e.g., "2512.12345")
@@ -330,4 +379,61 @@ def analyze_paper(
     Returns:
         Answer based on paper content and user context
     """
-    return _agent.analyze_paper(paper_id, user_query, user_context, date)
+    agent = Agent()
+    return agent.run(paper_id, user_query, user_context, date)
+
+
+def deep_research(paper_id: str, user_query: str, date: str = None) -> dict:
+    """
+    Tool function: Answer a specific question about a research paper using RAG.
+
+    Uses retrieval-augmented generation to find relevant sections of the paper
+    and provide a detailed, context-aware answer tailored to the user's background.
+
+    Args:
+        paper_id: Paper ID (e.g., "2512.12345" or just "12345")
+        user_query: The user's original question/request about the paper
+        date: Date in YYYY-MM-DD format (optional)
+
+    Returns:
+        dict with keys:
+            - success: bool
+            - paper_id: str (the paper analyzed)
+            - answer: str (the answer to the question)
+            - error: str (if failed)
+    """
+    print(f"\n[Deep Research Tool]")
+    print(f"  Paper ID: {paper_id}")
+    print(
+        f"  User query: {user_query[:80]}..."
+        if len(user_query) > 80
+        else f"  User query: {user_query}"
+    )
+
+    try:
+        # Normalize paper ID (remove arxiv prefix if present)
+        if "/" in paper_id:
+            paper_id = paper_id.split("/")[-1]
+
+        print(f"  Loading user context...")
+        # Load user context from CLI
+        from dxtr.cli import _load_user_context
+
+        user_context = _load_user_context()
+        print(f"  User context loaded ({len(user_context)} chars)")
+
+        print(f"  Calling deep research agent...")
+        # Call deep research agent
+        agent = Agent()
+        answer = agent.run(paper_id, user_query, user_context, date)
+
+        print(f"  Answer received ({len(answer)} chars)")
+
+        return {"success": True, "paper_id": paper_id, "answer": answer}
+
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return {"success": False, "paper_id": paper_id or "unknown", "error": str(e)}

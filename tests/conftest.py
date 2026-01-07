@@ -26,24 +26,6 @@ def tmp_prompts_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_ollama_response():
-    """
-    Create a mock Ollama response object.
-
-    Returns a function that creates mock responses.
-    """
-    def create_response(content: str, tool_calls=None):
-        """Create a mock response."""
-        response = Mock()
-        response.message = Mock()
-        response.message.content = content
-        response.message.tool_calls = tool_calls or []
-        return response
-
-    return create_response
-
-
-@pytest.fixture
 def sample_profile():
     """Sample user profile for testing."""
     return """# User Profile
