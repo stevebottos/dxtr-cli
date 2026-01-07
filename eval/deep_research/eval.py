@@ -13,6 +13,7 @@ Usage:
 import sys
 import json
 import argparse
+import time
 from pathlib import Path
 
 # Add project root to path
@@ -188,6 +189,8 @@ def run_single_eval(
 ) -> dict:
     """Run evaluation for a single query."""
     try:
+        # Time the deep research agent
+        research_start = time.time()
         result = research_agent.run(
             paper_id=paper_id,
             user_query=user_query,
@@ -196,16 +199,19 @@ def run_single_eval(
             papers_dir=papers_dir,
             return_details=True,
         )
+        research_time = time.time() - research_start
 
-        # LLM-as-judge evaluation
+        # Time the LLM-as-judge evaluation
+        eval_start = time.time()
         eval_results = evaluator.evaluate(
             user_query=user_query,
             abstract=result["abstract"],
             retrieved_chunks=result["retrieved_chunks"],
             answer=result["answer"],
         )
+        eval_time = time.time() - eval_start
 
-        # Ground truth check
+        # Ground truth check (fast, no LLM)
         gt_results = None
         if ground_truth_points:
             gt_results = check_ground_truth(result["answer"], ground_truth_points)
@@ -217,6 +223,11 @@ def run_single_eval(
             "answer": result["answer"],
             "metrics": eval_results["metrics"],
             "ground_truth": gt_results,
+            "timing": {
+                "research_seconds": research_time,
+                "eval_seconds": eval_time,
+                "total_seconds": research_time + eval_time,
+            },
         }
 
     except Exception as e:
@@ -341,8 +352,10 @@ def run_eval(
         if result["success"]:
             m = result["metrics"]
             gt = result.get("ground_truth")
+            t = result["timing"]
 
-            print(f"\nLLM-Judge: N={m['novelty_score']} R={m['relevance_score']} "
+            print(f"\nTiming: research={t['research_seconds']:.1f}s, eval={t['eval_seconds']:.1f}s, total={t['total_seconds']:.1f}s")
+            print(f"LLM-Judge: N={m['novelty_score']} R={m['relevance_score']} "
                   f"C={m['completeness_score']} F={m['faithfulness_score']} "
                   f"-> {m['overall_score']:.1f}/5")
 
@@ -373,12 +386,34 @@ def run_eval(
         avg_faithfulness = sum(r["metrics"]["faithfulness_score"] for r in successful) / len(successful)
         avg_overall = sum(r["metrics"]["overall_score"] for r in successful) / len(successful)
 
+        # Timing aggregate
+        research_times = [r["timing"]["research_seconds"] for r in successful]
+        eval_times = [r["timing"]["eval_seconds"] for r in successful]
+        total_times = [r["timing"]["total_seconds"] for r in successful]
+
+        avg_research = sum(research_times) / len(research_times)
+        avg_eval = sum(eval_times) / len(eval_times)
+        avg_total = sum(total_times) / len(total_times)
+        min_research = min(research_times)
+        max_research = max(research_times)
+
         # Ground truth aggregate
         gt_results = [r["ground_truth"] for r in successful if r.get("ground_truth")]
         avg_gt = sum(g["score"] for g in gt_results) / len(gt_results) if gt_results else None
 
         print(f"\nTests run: {len(results)}")
         print(f"Successful: {len(successful)}")
+
+        print(f"\nTiming (Deep Research Only):")
+        print(f"  Average: {avg_research:.1f}s")
+        print(f"  Min:     {min_research:.1f}s")
+        print(f"  Max:     {max_research:.1f}s")
+        print(f"  Total:   {sum(research_times):.1f}s")
+        print(f"\nTiming (Including Eval):")
+        print(f"  Avg research: {avg_research:.1f}s")
+        print(f"  Avg eval:     {avg_eval:.1f}s")
+        print(f"  Avg total:    {avg_total:.1f}s")
+
         print(f"\nLLM-as-Judge Scores:")
         print(f"  Novelty:      {avg_novelty:.2f}/5")
         print(f"  Relevance:    {avg_relevance:.2f}/5")
