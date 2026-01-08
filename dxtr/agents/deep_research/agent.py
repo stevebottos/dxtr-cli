@@ -55,9 +55,8 @@ class Agent(BaseAgent):
     def __init__(self):
         """Initialize deep research agent."""
         super().__init__()
-        self.prompts_dir = Path(__file__).parent / "prompts"
-        self.exploration_prompt = self.load_system_prompt(
-            self.prompts_dir / "exploration.md"
+        self.system_prompt = self.load_system_prompt(
+            Path(__file__).parent / "system.md"
         )
 
     @staticmethod
@@ -206,7 +205,7 @@ Generate 3-5 targeted exploration questions for this paper."""
 
         # Call SGLang function
         state = self._generate_questions_func.run(
-            system_prompt=self.exploration_prompt,
+            system_prompt=self.system_prompt,
             user_message=user_message,
             max_tokens=1000,
             temp=0.3,
@@ -383,7 +382,7 @@ def analyze_paper(
     return agent.run(paper_id, user_query, user_context, date)
 
 
-def deep_research(paper_id: str, user_query: str, date: str = None) -> dict:
+def deep_research(paper_id: str, user_query: str, user_context: str, date: str = None) -> dict:
     """
     Tool function: Answer a specific question about a research paper using RAG.
 
@@ -393,6 +392,7 @@ def deep_research(paper_id: str, user_query: str, date: str = None) -> dict:
     Args:
         paper_id: Paper ID (e.g., "2512.12345" or just "12345")
         user_query: The user's original question/request about the paper
+        user_context: The user's profile and context (passed from MainAgent)
         date: Date in YYYY-MM-DD format (optional)
 
     Returns:
@@ -414,13 +414,6 @@ def deep_research(paper_id: str, user_query: str, date: str = None) -> dict:
         # Normalize paper ID (remove arxiv prefix if present)
         if "/" in paper_id:
             paper_id = paper_id.split("/")[-1]
-
-        print(f"  Loading user context...")
-        # Load user context from CLI
-        from dxtr.cli import _load_user_context
-
-        user_context = _load_user_context()
-        print(f"  User context loaded ({len(user_context)} chars)")
 
         print(f"  Calling deep research agent...")
         # Call deep research agent

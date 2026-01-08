@@ -14,7 +14,7 @@ from datetime import datetime
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 
-from dxtr.config import config
+from dxtr.config_v2 import config
 from dxtr.util import get_daily_papers
 from dxtr.docling_utils import convert_pdf_local, generate_embeddings_local
 

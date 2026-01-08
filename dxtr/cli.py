@@ -1,150 +1,135 @@
 #!/usr/bin/env python3
 import argparse
 import json
-from collections import defaultdict
+import sys
 from pathlib import Path
 from datetime import datetime
-from .config import config
-from .agents.papers_helper.tools import paper_tools
 
-# from .agents.profile_creator.tools import profile_tools
-from .agents.deep_research import agent as deep_research_agent
-from .papers_etl import run_etl
+# Import new configuration and agents
+from dxtr.config_v2 import config
+from dxtr.agents.main.agent import MainAgent
+from dxtr.papers_etl import run_etl
 
-
-def _load_user_context():
-    """
-    Load user profile and GitHub analysis for context.
-
-    Returns:
-        str: Formatted context string with profile and GitHub analysis
-    """
-    context_parts = []
-
-    # Load profile
-    profile_path = Path(".dxtr/dxtr_profile.md")
+def _load_user_context() -> str:
+    """Load user profile content if it exists."""
+    profile_path = config.paths.profile_file
     if profile_path.exists():
-        profile_content = profile_path.read_text()
-        context_parts.append("# User Profile\n\n" + profile_content)
-
-    # Load and parse GitHub summary
-    github_summary_path = Path(".dxtr/github_summary.json")
-    if github_summary_path.exists():
-        try:
-            github_summary = json.loads(github_summary_path.read_text())
-
-            # Extract all keywords and create technology index
-            keyword_to_files = defaultdict(list)
-            repo_summaries = defaultdict(list)
-
-            for file_path, analysis_json in github_summary.items():
-                try:
-                    analysis = json.loads(analysis_json)
-                    keywords = analysis.get("keywords", [])
-                    summary = analysis.get("summary", "")
-
-                    # Extract repo name from path
-                    path_parts = Path(file_path).parts
-                    if "repos" in path_parts:
-                        idx = path_parts.index("repos")
-                        if idx + 2 < len(path_parts):
-                            repo = f"{path_parts[idx + 1]}/{path_parts[idx + 2]}"
-                            rel_file = "/".join(path_parts[idx + 3 :])
-
-                            # Build keyword index
-                            for keyword in keywords:
-                                keyword_to_files[keyword.lower()].append(
-                                    f"{repo}/{rel_file}"
-                                )
-
-                            # Store file summaries by repo
-                            if summary:
-                                repo_summaries[repo].append(
-                                    {
-                                        "file": rel_file,
-                                        "summary": summary,
-                                        "keywords": keywords,
-                                    }
-                                )
-
-                except json.JSONDecodeError:
-                    continue
-
-            # Format GitHub analysis context
-            if keyword_to_files or repo_summaries:
-                context_parts.append("\n\n---\n\n# GitHub Code Analysis")
-
-                # Technology Index
-                context_parts.append("\n## Technologies & Libraries Used")
-                context_parts.append("\n(Keyword → Files where it appears)\n")
-
-                # Sort keywords by frequency
-                sorted_keywords = sorted(
-                    keyword_to_files.items(), key=lambda x: len(x[1]), reverse=True
-                )[:50]  # Top 50 most common keywords
-
-                for keyword, files in sorted_keywords:
-                    file_count = len(set(files))
-                    context_parts.append(f"- **{keyword}**: {file_count} file(s)")
-
-                # Repository Summaries
-                context_parts.append("\n\n## Implementation Details by Repository\n")
-
-                for repo, files in sorted(repo_summaries.items()):
-                    context_parts.append(f"\n### {repo}\n")
-                    for file_info in files[
-                        :10
-                    ]:  # Limit to 10 files per repo to save space
-                        context_parts.append(
-                            f"- `{file_info['file']}`: {file_info['summary']}"
-                        )
-
-                    if len(files) > 10:
-                        context_parts.append(f"- ... and {len(files) - 10} more files")
-
-        except Exception as e:
-            context_parts.append(f"\n\n[Warning: Could not load GitHub analysis: {e}]")
-
-    return "\n".join(context_parts)
-
+        return profile_path.read_text()
+    return ""
 
 def cmd_get_papers(args):
     """Get papers command - ETL pipeline for paper retrieval and processing"""
     run_etl(date=args.date, max_papers=args.max_papers)
 
+def _process_turn(agent, chat_history):
+    """
+    Process a single turn of conversation:
+    - Generate response
+    - Handle tool calls (recursively/iteratively)
+    - Print output
+    """
+    while True:
+        print("DXTR: ", end="", flush=True)
+        
+        response_generator = agent.chat(chat_history)
+        full_response = ""
+        
+        # Consume generator
+        for chunk in response_generator:
+            print(chunk, end="", flush=True)
+            full_response += chunk
+        print() # Newline after response
+        
+        # Check for tool call
+        tool_call = None
+        try:
+            cleaned = full_response.strip()
+            # If think tags are present, we should clean them before parsing JSON
+            if "<think>" in full_response and "</think>" in full_response:
+                 cleaned = full_response.split("</think>")[-1].strip()
+            
+            if cleaned.startswith("{") and cleaned.endswith("}"):
+                data = json.loads(cleaned)
+                if "tool" in data:
+                    tool_call = data
+        except json.JSONDecodeError:
+            pass
+
+        if tool_call:
+            tool_name = tool_call.get("tool")
+            tool_params = tool_call.get("parameters", {})
+            
+            print(f"\n[Calling Tool: {tool_name}]")
+            
+            result = None
+            if hasattr(agent, tool_name):
+                try:
+                    tool_func = getattr(agent, tool_name)
+                    result = tool_func(**tool_params)
+                except Exception as e:
+                    result = f"Error executing tool '{tool_name}': {e}"
+            else:
+                result = f"Error: Tool '{tool_name}' not found."
+            
+            print(f"[Result: {str(result)[:100]}...]")
+            
+            # Context Reloading Hook
+            if tool_name == "synthesize_profile" and "Profile synthesized" in str(result):
+                new_context = _load_user_context()
+                if new_context:
+                    # Remove old profile system message if exists
+                    chat_history[:] = [msg for msg in chat_history if not (msg.get("role") == "system" and "User Profile" in msg.get("content", ""))]
+                    # Add new
+                    chat_history.insert(0, {"role": "system", "content": f"User Profile:\n{new_context}"})
+                    print("[System: User Profile Loaded]")
+            
+            # Add tool interaction to history
+            chat_history.append({"role": "assistant", "content": full_response})
+            chat_history.append({"role": "tool", "content": str(result)})
+            
+            # Loop continues to let agent respond to tool result
+            continue
+        
+        else:
+            # Normal response
+            chat_history.append({"role": "assistant", "content": full_response})
+            break
 
 def cmd_chat(args):
     """
     Start the main DXTR chat interface.
     """
-    profile_path = Path(".dxtr/dxtr_profile.md")
+    print("Initializing DXTR Agent (SGLang)...")
+    try:
+        agent = MainAgent()
+    except Exception as e:
+        print(f"Error initializing agent: {e}")
+        print("Ensure SGLang server is running at localhost:30000")
+        return
 
-    if not profile_path.exists():
-        print("\n" + "=" * 80)
-        print("NO PROFILE FOUND")
-        print("=" * 80)
-        print("\nTo get started:")
-        print("1. Create a file named 'profile.md' with your information")
-        print("2. Include your GitHub profile URL")
-        print("3. Ask me to create your profile!\n")
-        print("Or type '/profile' to create your profile now.\n")
-
-    # Load user context if profile exists
-    user_context = ""
-    if profile_path.exists():
-        print("[Loading user context...]")
-        user_context = _load_user_context()
-        print("[✓] Context loaded")
-
+    # Initial context
+    user_context = _load_user_context()
+    
+    print("\nDXTR - Research Assistant")
     print("Type 'exit' or 'quit' to end the session.")
     print("Type '/help' for available commands.\n")
 
-    # Main chat loop with user context prepended
-    chat_history = [{"role": "system", "content": user_context}]
+    # Chat history
+    chat_history = []
+    
+    if user_context:
+        # We silently load the profile. The agent will confirm it in the greeting.
+        chat_history.append({"role": "system", "content": f"User Profile:\n{user_context}"})
+
+    # Auto-Greeting / Pre-initialization
+    # We inject a hidden user message to prompt the agent to start.
+    print("Connecting to agent...\n")
+    chat_history.append({"role": "user", "content": "Hello. Please check if my profile is loaded and briefly introduce yourself."})
+    _process_turn(agent, chat_history)
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = input("\nYou: ").strip()
 
             if not user_input:
                 continue
@@ -156,127 +141,20 @@ def cmd_chat(args):
             if user_input == "/help":
                 print("\nAvailable commands:")
                 print("  /help     - Show this help message")
-                print("  /profile  - Recreate your profile")
                 print("  exit/quit - End the session\n")
                 continue
 
-            if user_input == "/profile":
-                print("\nStarting profile recreation...\n")
-                result = profile_tools.create_profile()
-
-                if result.get("success"):
-                    print("\nProfile updated. Reloading context...\n")
-                    user_context = _load_user_context()
-                    chat_history = [{"role": "system", "content": user_context}]
-                    print("[✓] Context reloaded. Continuing chat...\n")
-                else:
-                    print(f"\nError: {result.get('error')}\n")
-                continue
-
-            # Add user message to history
+            # Add user message
             chat_history.append({"role": "user", "content": user_input})
 
-            # Available tools
-            tools = [
-                paper_tools.TOOL_DEFINITION,
-                profile_tools.TOOL_DEFINITION,
-                deep_research_agent.TOOL_DEFINITION,
-            ]
-            available_functions = {
-                "rank_papers": paper_tools.rank_papers,
-                "create_profile": profile_tools.create_profile,
-                "deep_research": deep_research_agent.deep_research,
-            }
-
-            # Get response from agent with tools (streaming)
-            main_config = config.get_model_config("main")
-            print("DXTR: ", end="", flush=True)
-
-            response_text = ""
-            tool_calls = None
-
-            response_stream = chat(
-                model=main_config.name,
-                messages=chat_history,
-                tools=tools,
-                stream=True,
-                options={
-                    "temperature": main_config.temperature,
-                    "num_ctx": main_config.context_window,
-                },
-            )
-
-            # Stream response and check for tool calls
-            for chunk in response_stream:
-                if hasattr(chunk.message, "content") and chunk.message.content:
-                    content = chunk.message.content
-                    response_text += content
-                    print(content, end="", flush=True)
-
-                # Tool calls come in the final chunk
-                if hasattr(chunk.message, "tool_calls") and chunk.message.tool_calls:
-                    tool_calls = chunk.message.tool_calls
-
-            # Handle tool calls if any
-            if tool_calls:
-                print("\n")  # New line after initial response
-
-                # Add message to history
-                chat_history.append(
-                    {
-                        "role": "assistant",
-                        "content": response_text,
-                        "tool_calls": tool_calls,
-                    }
-                )
-
-                for tool_call in tool_calls:
-                    function_name = tool_call.function.name
-                    function_args = tool_call.function.arguments
-
-                    if function_name in available_functions:
-                        print(f"[Calling {function_name}...]")
-                        function_result = available_functions[function_name](
-                            **function_args
-                        )
-
-                        # Format tool result for better model understanding
-                        if function_result.get("success"):
-                            if function_name == "rank_papers":
-                                tool_content = f"Successfully ranked papers for {function_result['date']}:\n\n{function_result['ranking']}"
-                            elif function_name == "create_profile":
-                                tool_content = f"Successfully created profile at {function_result['profile_path']}. User context has been updated."
-                                # Reload context after profile creation
-                                user_context = _load_user_context()
-                                chat_history[0] = {
-                                    "role": "system",
-                                    "content": user_context,
-                                }
-                            elif function_name == "deep_research":
-                                tool_content = f"Deep research answer for paper {function_result['paper_id']}:\n\n{function_result['answer']}"
-                            else:
-                                tool_content = json.dumps(function_result)
-                        else:
-                            tool_content = f"Error: {function_result.get('error', 'Unknown error')}"
-
-                        chat_history.append({"role": "tool", "content": tool_content})
-
-                # Tool output already streamed - no need for main agent to synthesize
-                print("\n[Tool complete - added to context]\n")
-
-            del main_config
-
-            print("\n")
-
-            # Add assistant response to history
-            chat_history.append({"role": "assistant", "content": response_text})
+            # Process turn
+            _process_turn(agent, chat_history)
 
         except KeyboardInterrupt:
             print("\n\nGoodbye!\n")
             break
         except Exception as e:
             print(f"\nError: {e}\n")
-
 
 def main():
     parser = argparse.ArgumentParser(

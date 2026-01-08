@@ -5,10 +5,23 @@ Provides common functionality for prompt loading and SGLang backend management.
 """
 
 from pathlib import Path
+from dataclasses import dataclass
 import sglang as sgl
 
 from dxtr.config_v2 import config
 
+@dataclass
+class GlobalState:
+    """Simple global state tracking for the agent."""
+    profile_loaded: bool = False
+    profile_required: bool = True
+    github_summary_loaded: bool = False
+    github_summary_required: bool = False
+
+    def check_state(self):
+        """Update state based on file existence."""
+        self.profile_loaded = config.paths.profile_file.exists()
+        self.github_summary_loaded = config.paths.github_summary_file.exists()
 
 class BaseAgent:
     """Base class for SGLang-powered agents."""
@@ -20,6 +33,10 @@ class BaseAgent:
             prompts_dir: Directory containing agent's prompt files.
                         Defaults to 'prompts' subdirectory of agent module.
         """
+        # Initialize and check global state
+        self.state = GlobalState()
+        self.state.check_state()
+
         # Connect to SGLang backend
         raw_url = config.sglang.base_url
         base_url = raw_url.replace("/v1", "").rstrip("/")
