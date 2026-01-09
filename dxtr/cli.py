@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -59,7 +60,19 @@ def _process_turn(agent, chat_history):
                 tool_name = func.get("name", "")
                 args_str = func.get("arguments", "{}")
 
-                print(f"\n[Calling Tool: {tool_name}]")
+                # Human-readable descriptions
+                tool_desc = {
+                    "read_file": "Reading file",
+                    "check_papers": "Checking for papers",
+                    "get_papers": "Downloading papers (may take a few minutes)",
+                    "list_papers": "Listing papers",
+                    "summarize_github": "Analyzing GitHub repos",
+                    "synthesize_profile": "Synthesizing profile",
+                    "rank_papers": "Ranking papers (may take a minute)",
+                    "deep_research": "Analyzing paper",
+                }.get(tool_name, tool_name)
+
+                print(f"\n[{tool_desc}...]", flush=True)
 
                 # Parse arguments
                 try:
@@ -68,6 +81,7 @@ def _process_turn(agent, chat_history):
                     tool_params = {}
 
                 result = None
+                start = time.time()
                 if hasattr(agent, tool_name):
                     try:
                         tool_func = getattr(agent, tool_name)
@@ -77,7 +91,8 @@ def _process_turn(agent, chat_history):
                 else:
                     result = f"Error: Tool '{tool_name}' not found."
 
-                print(f"[Result: {str(result)[:100]}...]")
+                elapsed = time.time() - start
+                print(f"[Done in {elapsed:.1f}s]" if elapsed > 1 else "[Done]")
 
                 # Context Reloading Hook
                 if tool_name == "synthesize_profile" and "Profile synthesized" in str(result):

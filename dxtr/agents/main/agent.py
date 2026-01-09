@@ -10,16 +10,21 @@ Responsibilities:
 import json
 import requests
 from pathlib import Path
+from datetime import datetime
 from typing import Generator
 
 from dxtr.agents.base import BaseAgent
 from dxtr.config_v2 import config
 from dxtr.agents.github_summarize.agent import Agent as GithubSummarizeAgent
 from dxtr.agents.profile_synthesize.agent import Agent as ProfileSynthesizeAgent
+from dxtr.agents.papers_ranking.agent import Agent as PapersRankingAgent
+from dxtr.agents.deep_research.agent import Agent as DeepResearchAgent
+from dxtr.papers_etl import PapersETL
 
 
 # Tool Definitions - these map to methods on MainAgent
 TOOLS = [
+    # --- Utilities ---
     {
         "type": "function",
         "function": {
@@ -34,6 +39,50 @@ TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_papers",
+            "description": "Check if papers have been downloaded for a given date.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today if not provided."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_papers",
+            "description": "Download and process papers from HuggingFace for a given date. This may take several minutes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today if not provided."},
+                    "max_papers": {"type": "integer", "description": "Maximum number of papers to download. Downloads all if not specified."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_papers",
+            "description": "List all papers for a given date with their titles and abstracts. Prints full details to console.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today if not provided."}
+                },
+                "required": []
+            }
+        }
+    },
+    # --- Profile Setup ---
     {
         "type": "function",
         "function": {
@@ -59,6 +108,37 @@ TOOLS = [
                     "seed_profile_path": {"type": "string", "description": "Path to the original seed profile.md provided by user"}
                 },
                 "required": ["seed_profile_path"]
+            }
+        }
+    },
+    # --- Paper Analysis ---
+    {
+        "type": "function",
+        "function": {
+            "name": "rank_papers",
+            "description": "Rank papers by relevance to the user's profile and interests. Prints ranked list to console.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today."},
+                    "query": {"type": "string", "description": "Optional focus query, e.g. 'agentic systems' to prioritize certain topics."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "deep_research",
+            "description": "Deep dive into a specific paper using RAG. Answers questions about the paper's content, methods, and findings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_id": {"type": "string", "description": "Paper ID (e.g., '2601.12345')"},
+                    "query": {"type": "string", "description": "Question to answer about the paper"}
+                },
+                "required": ["paper_id", "query"]
             }
         }
     }
@@ -91,6 +171,88 @@ class MainAgent(BaseAgent):
             return content
         except Exception as e:
             return f"Error reading file: {e}"
+
+    def check_papers(self, date: str = None) -> str:
+        """Check if papers exist for a given date."""
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        papers_dir = config.paths.papers_dir / date
+        if not papers_dir.exists():
+            return f"No papers found for {date}. Use get_papers to download them."
+
+        # Count papers by looking for metadata.json files
+        paper_dirs = [d for d in papers_dir.iterdir() if d.is_dir() and (d / "metadata.json").exists()]
+        count = len(paper_dirs)
+
+        if count == 0:
+            return f"No papers found for {date}. Use get_papers to download them."
+
+        return f"Found {count} papers for {date}."
+
+    def get_papers(self, date: str = None, max_papers: int = None) -> str:
+        """Download and process papers from HuggingFace."""
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            etl = PapersETL()
+            etl.run(date=date, max_papers=max_papers)
+
+            # Count downloaded papers
+            papers_dir = config.paths.papers_dir / date
+            if papers_dir.exists():
+                paper_dirs = [d for d in papers_dir.iterdir() if d.is_dir() and (d / "metadata.json").exists()]
+                count = len(paper_dirs)
+                return f"Downloaded and processed {count} papers for {date}. Saved to {papers_dir}"
+            else:
+                return f"No papers were downloaded for {date}."
+        except Exception as e:
+            return f"Error downloading papers: {e}"
+
+    def list_papers(self, date: str = None) -> str:
+        """List papers for a date - prints to console, returns summary."""
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        papers_dir = config.paths.papers_dir / date
+        if not papers_dir.exists():
+            return f"No papers found for {date}."
+
+        # Load all paper metadata
+        papers = []
+        for paper_dir in sorted(papers_dir.iterdir()):
+            if not paper_dir.is_dir():
+                continue
+            metadata_file = paper_dir / "metadata.json"
+            if metadata_file.exists():
+                try:
+                    metadata = json.loads(metadata_file.read_text())
+                    papers.append(metadata)
+                except Exception:
+                    continue
+
+        if not papers:
+            return f"No papers found for {date}."
+
+        # Print full content to console (user sees this)
+        print(f"\n{'='*70}")
+        print(f"Papers for {date} ({len(papers)} total)")
+        print(f"{'='*70}\n")
+
+        for i, p in enumerate(papers, 1):
+            title = p.get("title", "Unknown title")
+            paper_id = p.get("id", "unknown")
+            summary = p.get("summary", "No abstract available")
+            upvotes = p.get("upvotes", 0)
+
+            print(f"{i}. {title}")
+            print(f"   ID: {paper_id} | Upvotes: {upvotes}")
+            print(f"   {summary[:300]}..." if len(summary) > 300 else f"   {summary}")
+            print()
+
+        # Return minimal summary to LLM (keeps context small)
+        return f"Listed {len(papers)} papers for {date}. User can see titles and abstracts above."
 
     def summarize_github(self, profile_path: str) -> str:
         """Run GitHub summarize agent on the profile."""
@@ -125,6 +287,74 @@ class MainAgent(BaseAgent):
                 return "Error: Profile synthesis returned empty result."
         except Exception as e:
             return f"Error running profile synthesis: {e}"
+
+    def rank_papers(self, date: str = None, query: str = None) -> str:
+        """Rank papers by relevance - prints to console, returns summary."""
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        # Load user context from profile
+        user_context = ""
+        if config.paths.profile_file.exists():
+            user_context = config.paths.profile_file.read_text()
+
+        if not user_context:
+            return "Error: No user profile found. Please set up your profile first."
+
+        try:
+            agent = PapersRankingAgent()
+            result = agent.run(
+                date=date,
+                user_context=user_context,
+                user_query=query or "rank by relevance to my profile"
+            )
+
+            if "error" in result:
+                return f"Error: {result['error']}"
+
+            # Print ranking to console
+            print(f"\n{'='*70}")
+            print(f"Paper Rankings for {date} ({result['paper_count']} papers)")
+            print(f"{'='*70}\n")
+            print(result["final_ranking"])
+            print()
+
+            # Return summary to LLM
+            top_papers = result["individual_scores"][:5]
+            top_titles = [f"{p['final_score']}/5: {p['title'][:50]}..." for p in top_papers]
+            return f"Ranked {result['paper_count']} papers. Top 5 shown above. User can see full ranking."
+
+        except Exception as e:
+            return f"Error ranking papers: {e}"
+
+    def deep_research(self, paper_id: str, query: str) -> str:
+        """Deep research into a paper - prints analysis to console, returns summary."""
+        # Load user context from profile
+        user_context = ""
+        if config.paths.profile_file.exists():
+            user_context = config.paths.profile_file.read_text()
+
+        try:
+            agent = DeepResearchAgent()
+            result = agent.run(
+                paper_id=paper_id,
+                user_query=query,
+                user_context=user_context
+            )
+
+            # Print analysis to console
+            print(f"\n{'='*70}")
+            print(f"Deep Research: {paper_id}")
+            print(f"Query: {query}")
+            print(f"{'='*70}\n")
+            print(result)
+            print()
+
+            # Return summary to LLM
+            return f"Analysis complete for paper {paper_id}. Full answer printed above ({len(result)} chars)."
+
+        except Exception as e:
+            return f"Error in deep research: {e}"
 
     # --- Chat Method ---
 
@@ -164,10 +394,22 @@ class MainAgent(BaseAgent):
                 })
             elif role == "assistant" and tool_calls:
                 # Assistant message with tool calls
+                # Ensure arguments is valid JSON (not empty string)
+                sanitized_tool_calls = []
+                for tc in tool_calls:
+                    sanitized_tc = {
+                        "id": tc.get("id", ""),
+                        "type": tc.get("type", "function"),
+                        "function": {
+                            "name": tc.get("function", {}).get("name", ""),
+                            "arguments": tc.get("function", {}).get("arguments") or "{}"
+                        }
+                    }
+                    sanitized_tool_calls.append(sanitized_tc)
                 api_messages.append({
                     "role": "assistant",
                     "content": content or "",
-                    "tool_calls": tool_calls
+                    "tool_calls": sanitized_tool_calls
                 })
             elif role == "system" and "User Profile" in (content or ""):
                 api_messages.append({"role": "system", "content": content})
