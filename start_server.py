@@ -118,7 +118,7 @@ MODELS = {  # --- NEW: Reasoning & Tool Calling (Jan 2026) ---
     },
 }
 
-DEFAULT_MODEL = "deepseek-r1-8b"
+DEFAULT_MODEL = "qwen3-8b"
 DEFAULT_PORT = 30000
 
 
