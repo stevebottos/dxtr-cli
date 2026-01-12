@@ -251,8 +251,12 @@ class MainAgent(BaseAgent):
             print(f"   {summary[:300]}..." if len(summary) > 300 else f"   {summary}")
             print()
 
-        # Return minimal summary to LLM (keeps context small)
-        return f"Listed {len(papers)} papers for {date}. User can see titles and abstracts above."
+        # Return paper list to LLM so it can reference them without hallucinating
+        papers_summary = "\n".join([
+            f"{i+1}. {p.get('title', 'Unknown')} (ID: {p.get('id', 'unknown')})"
+            for i, p in enumerate(papers)
+        ])
+        return f"Listed {len(papers)} papers for {date}:\n{papers_summary}\n\nFull details with abstracts printed to console above."
 
     def summarize_github(self, profile_path: str) -> str:
         """Run GitHub summarize agent on the profile."""
@@ -319,10 +323,13 @@ class MainAgent(BaseAgent):
             print(result["final_ranking"])
             print()
 
-            # Return summary to LLM
+            # Return top papers data to LLM so it can reference them without hallucinating
             top_papers = result["individual_scores"][:5]
-            top_titles = [f"{p['final_score']}/5: {p['title'][:50]}..." for p in top_papers]
-            return f"Ranked {result['paper_count']} papers. Top 5 shown above. User can see full ranking."
+            top_papers_summary = "\n".join([
+                f"{i+1}. [{p['final_score']}/5] {p['title']} (ID: {p['id']})"
+                for i, p in enumerate(top_papers)
+            ])
+            return f"Ranked {result['paper_count']} papers. Top 5:\n{top_papers_summary}\n\nFull ranking printed to console above."
 
         except Exception as e:
             return f"Error ranking papers: {e}"
@@ -423,7 +430,7 @@ class MainAgent(BaseAgent):
             "messages": api_messages,
             "tools": TOOLS,
             "temperature": 0.3,
-            "max_tokens": 1000,
+            "max_tokens": 2000,
             "stream": True
         }
 

@@ -13,88 +13,148 @@ DXTR is an AI research assistant for machine learning engineers. It helps you st
 - **Daily Paper Pipeline**: Automated ETL from HuggingFace daily papers with Docling for PDF processing
 - **Personalized Ranking**: Papers ranked based on your profile and GitHub activity
 - **Agentic Deep Research**: Multi-step RAG system that generates exploration questions to retrieve relevant paper sections
-- **Streaming Agent Architecture**: See agent outputs in real-time as they think and respond
-- **GitHub Analysis**: Automatically analyzes your repositories to understand your interests
-- **Profile Management**: Maintains personalized context for tailored recommendations
+- **Profile Synthesis**: Automatically analyzes your GitHub repos to understand your expertise
+- **Streaming Output**: See agent outputs in real-time as they think and respond
 
 ## Installation
-1. `uv pip install "sglang" --prerelease=allow`
-2. `pip install -e .`
-```
 
-## Usage
+### Prerequisites
 
-### First-Time Setup
+- Python 3.12+
+- CUDA-capable GPU (12GB+ VRAM recommended)
+- [uv](https://github.com/astral-sh/uv) package manager (recommended)
 
-```bash
-# Create your profile (analyzes your GitHub repos and interests)
-dxtr create-profile
-
-# Process today's papers (downloads, converts PDFs, builds indices)
-python process_daily_papers.py
-```
-
-### Daily Workflow
+### Setup
 
 ```bash
-# Start interactive chat
-dxtr chat
+# 1. Install sglang (requires prerelease for latest features)
+uv pip install "sglang[all]" --prerelease=allow
 
-# In chat, you can:
-# - "rank today's papers" - Get personalized paper rankings
-# - "what's the best paper today" - See single most relevant paper
-# - "do a deep dive on paper 2512.12345" - Agentic RAG analysis
-# - "summarize paper X" - Quick summary of a paper
+# 2. Install dxtr
+pip install -e .
+
+# 3. (Optional) Install pexpect for automated evaluation
+pip install pexpect
 ```
 
-### Manual Paper Processing
+## Quick Start
+
+### 1. Start the SGLang Server
 
 ```bash
-# Download and process papers for a specific date
-dxtr get-papers --date 2024-12-30
+# List available models
+python start_server.py --list
 
-# Update your profile
-dxtr create-profile
+# Start with default model (qwen3-8b)
+python start_server.py
+
+# Or choose a specific model
+python start_server.py qwen-14b        # Higher quality
+python start_server.py deepseek-r1-8b  # Best reasoning
 ```
+
+### 2. Download Papers
+
+```bash
+# Download today's papers from HuggingFace
+python -m dxtr.cli get-papers
+
+# Or specify a date
+python -m dxtr.cli get-papers --date 2026-01-09
+```
+
+### 3. Start Chat
+
+```bash
+python -m dxtr.cli chat
+```
+
+On first run, DXTR will:
+1. Ask for your profile path (e.g., `./profile.md`)
+2. Analyze your GitHub repositories
+3. Synthesize a personalized profile
+
+Then you can:
+- `rank the papers from 2026-01-09` - Get personalized paper rankings
+- `deep dive into paper 2512.12345` - Agentic RAG analysis
+- Ask follow-up questions about papers
+
+## Profile Format
+
+Create a `profile.md` with your background and interests:
+
+```markdown
+# About Me
+I am a machine learning engineer with X years of experience...
+
+# Interests
+- Topic 1
+- Topic 2
+- What I want to learn
+
+# Links
+https://github.com/yourusername
+```
+
+DXTR will analyze your GitHub repos and synthesize a detailed profile with:
+- Technical competencies (strong areas, learning areas, gaps)
+- Interest signals (HIGH/LOW priority topics for paper ranking)
+- Constraints (hardware, preferences)
+- Goals (immediate, career direction)
 
 ## Architecture
 
-### Multi-Agent System
+### Agents
 
-DXTR uses a streaming multi-agent architecture where each agent outputs directly to the user:
-
-- **Main Agent** (mistral-nemo): Orchestrates tasks and delegates to specialized agents
-- **Papers Helper** (mistral-nemo): Ranks papers based on user profile, responds flexibly to queries
-- **Deep Research** (gemma3:12b): Agentic RAG system for paper analysis
-  - Generates exploration questions from abstract + user context
-  - Retrieves relevant chunks via multi-faceted query strategy
-  - Synthesizes comprehensive answers using retrieved content
-- **Profile Creator** (qwen2.5-coder): Builds and maintains user profiles from GitHub activity
-- **Git Helper**: Analyzes repositories to understand user interests
+| Agent | Purpose |
+|-------|---------|
+| **Main** | Orchestrates tasks, handles tool calls |
+| **GitHub Summarize** | Analyzes GitHub repos → `.dxtr/github_summary.json` |
+| **Profile Synthesize** | Creates profile from artifacts → `.dxtr/dxtr_profile.md` |
+| **Papers Ranking** | Ranks papers by relevance to profile |
+| **Deep Research** | RAG-based deep dive into papers |
 
 ### Key Design Principles
 
-- **Prompts in Markdown**: All prompts live in `prompts/*.md` files, not in code
-- **Streaming by Default**: Agent outputs stream in real-time for transparency
-- **No Re-synthesis**: Main agent stays silent after tool execution - agent outputs are final
-- **User Query Passthrough**: Original user queries passed verbatim to agents
+- **One agent, one task**: Each agent has a focused purpose with its own `system.md` prompt
+- **Prompts in markdown**: All prompts live in `agents/*/system.md`, not in code
+- **Main orchestrates**: Only the main agent can invoke other agents
+- **Streaming by default**: Agent outputs stream in real-time
 
-### Papers ETL Pipeline
+## Evaluation
 
-The `process_daily_papers.py` script orchestrates:
-1. Download papers from HuggingFace daily papers
-2. Start Docling Docker container for PDF processing
-3. Convert PDFs to markdown + layout JSON
-4. Build LlamaIndex vector indices with nomic-embed-text
-5. Store everything in `.dxtr/hf_papers/YYYY-MM-DD/`
+DXTR includes an LLM-as-a-judge evaluation system:
 
-All configuration is centralized in `dxtr/config.py`.
+```bash
+# Run automated user journey (requires pexpect)
+python eval/e2e_journey/run_eval.py
+
+# Artifacts saved to .dxtr_eval/debug/
+# - transcript.txt (full conversation)
+# - profile_artifacts/ (generated profiles)
+
+# Then ask Claude to evaluate using:
+# eval/llm_as_a_judge.md
+```
+
+See `eval/llm_as_a_judge.md` for evaluation criteria and methodology.
+
+## Configuration
+
+All configuration is in `dxtr/config_v2.py`:
+
+- SGLang server URL (default: `http://localhost:30000`)
+- Model parameters (temperature, max_tokens)
+- File paths (`.dxtr/` directory structure)
 
 ## Development
 
-Run tests:
 ```bash
+# Run tests
 pytest
+
+# Check syntax
+python -m py_compile dxtr/cli.py
 ```
 
 ## License

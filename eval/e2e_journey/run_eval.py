@@ -3,133 +3,123 @@
 End-to-End User Journey Evaluation
 
 Automates the complete DXTR user journey from a fresh start:
-1. Initiate chat (dxtr chat)
-2. Profile creation (pass profile.md, GitHub summarization, profile synthesis)
-3. Paper ranking (check/download/rank papers)
-4. Deep research (ask for best paper recommendation from top-5)
+1. Profile creation (provide profile.md, GitHub summarization, profile synthesis)
+2. Paper ranking (using pre-downloaded papers)
+3. Best paper recommendation
 
-All outputs are captured for LLM-as-a-judge evaluation.
+Prerequisites: Papers must be downloaded first via `dxtr get-papers`
+
+Outputs:
+- .dxtr_eval/debug/transcript.txt - Full conversation
+- .dxtr_eval/debug/profile_artifacts/ - Generated profile files
 
 Usage: python eval/e2e_journey/run_eval.py
 """
 
 import sys
-import os
-import re
 import shutil
 import time
 from pathlib import Path
 from datetime import datetime
 
-# Try pexpect, fall back to manual instructions
 try:
     import pexpect
     HAS_PEXPECT = True
 except ImportError:
     HAS_PEXPECT = False
 
-# Add project root to path
+# Paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Eval output directory
 EVAL_DIR = PROJECT_ROOT / ".dxtr_eval"
 DEBUG_DIR = EVAL_DIR / "debug"
-TRANSCRIPT_FILE = DEBUG_DIR / "full_transcript.txt"
-RANKINGS_FILE = DEBUG_DIR / "rankings.txt"
-RECOMMENDATION_FILE = DEBUG_DIR / "recommendation.txt"
+TRANSCRIPT_FILE = DEBUG_DIR / "transcript.txt"
 PROFILE_ARTIFACTS_DIR = DEBUG_DIR / "profile_artifacts"
 
-# User journey script - what we say at each step
-USER_JOURNEY = [
-    # Step 1: Initial greeting - DXTR will notice no profile
-    # We wait for DXTR's greeting and profile prompt
 
-    # Step 2: Provide profile path
-    {"say": "./profile.md", "wait_for": "read", "description": "Provide profile path"},
+def find_available_papers() -> tuple[str | None, int]:
+    """Find available papers in .dxtr/hf_papers/."""
+    papers_dir = PROJECT_ROOT / ".dxtr" / "hf_papers"
+    if not papers_dir.exists():
+        return None, 0
 
-    # Step 3: Confirm reading profile (Missing in original)
-    {"say": "yes", "wait_for": "analyze", "description": "Confirm reading profile"},
+    available = []
+    for date_dir in papers_dir.iterdir():
+        if not date_dir.is_dir():
+            continue
+        paper_count = sum(
+            1 for p in date_dir.iterdir()
+            if p.is_dir() and (p / "metadata.json").exists()
+        )
+        if paper_count > 0:
+            available.append((date_dir.name, paper_count))
 
-    # Step 4: Confirm GitHub summarization
-    {"say": "yes", "wait_for": "synthesize", "description": "Confirm GitHub summarization"},
+    if not available:
+        return None, 0
 
-    # Step 5: Confirm profile synthesis
-    {"say": "yes", "wait_for": "created|updated|ready|help", "description": "Confirm profile synthesis", "timeout": 180},
-
-    # Step 6: Ask for paper ranking
-    {"say": "rank today's papers for me", "wait_for": "download|check", "description": "Request paper ranking"},
-
-    # Step 7: Confirm paper download (if needed)
-    {"say": "yes", "wait_for": "rank|proceed|different date", "description": "Confirm paper download"},
-
-    # Step 8: Confirm ranking (if asked)
-    {"say": "yes", "wait_for": "Ranked", "description": "Confirm ranking", "capture_as": "rankings", "timeout": 180},
-
-    # Step 9: Ask for best paper recommendation
-    {"say": "Based on the top 5 papers, which single paper would be the absolute best for a side project given my profile? Explain why.",
-     "wait_for": "Analysis complete", "description": "Request best paper recommendation", "capture_as": "recommendation", "timeout": 120},
-]
+    available.sort(reverse=True)
+    return available[0]
 
 
-def clean_ansi(text: str) -> str:
-    """Remove ANSI escape codes from text."""
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi_escape.sub('', text)
+def build_user_journey(papers_date: str) -> list[dict]:
+    """Build user journey steps."""
+    return [
+        {"say": "./profile.md", "wait_for": r"(read|Read|proceed|Proceed)", "description": "Provide profile path"},
+        {"say": "yes", "wait_for": r"(GitHub|github|analyze|summarize)", "description": "Confirm reading profile", "timeout": 60},
+        {"say": "yes", "wait_for": r"(synthesize|profile|complete)", "description": "Confirm GitHub summarization", "timeout": 180},
+        {"say": "yes", "wait_for": r"(ready|help|assist|paper|created|saved)", "description": "Confirm profile synthesis", "timeout": 180},
+        {"say": f"rank the papers from {papers_date}", "wait_for": r"(rank|proceed|Shall)", "description": f"Request paper ranking"},
+        {"say": "yes", "wait_for": r"(Ranked|ranked|Top|ranking)", "description": "Confirm ranking", "timeout": 180},
+        {"say": "Based on the top 5 papers, which single paper would be the absolute best for a side project given my profile? Explain why.", "wait_for": r".", "description": "Request recommendation", "timeout": 120},
+    ]
 
 
-def setup_eval_directory():
-    """Create fresh eval directory structure."""
+def setup_eval_directory(papers_date: str, paper_count: int):
+    """Create fresh eval directory."""
     if EVAL_DIR.exists():
         shutil.rmtree(EVAL_DIR)
 
     DEBUG_DIR.mkdir(parents=True)
     PROFILE_ARTIFACTS_DIR.mkdir(parents=True)
 
-    # Create metadata
-    metadata = {
-        "started_at": datetime.now().isoformat(),
-        "profile_source": str(PROJECT_ROOT / "profile.md"),
-    }
     (DEBUG_DIR / "metadata.txt").write_text(
         f"E2E Journey Evaluation\n"
-        f"Started: {metadata['started_at']}\n"
-        f"Profile: {metadata['profile_source']}\n"
+        f"Started: {datetime.now().isoformat()}\n"
+        f"Profile: {PROJECT_ROOT / 'profile.md'}\n"
+        f"Papers: {paper_count} from {papers_date}\n"
     )
-
-    return metadata
 
 
 def clear_dxtr_state():
-    """Clear .dxtr directory to simulate fresh start."""
+    """Clear .dxtr directory, preserving papers."""
     dxtr_dir = PROJECT_ROOT / ".dxtr"
-    if dxtr_dir.exists():
-        # Backup papers if they exist (expensive to re-download)
-        papers_dir = dxtr_dir / "hf_papers"
-        papers_backup = None
-        if papers_dir.exists():
-            papers_backup = PROJECT_ROOT / ".dxtr_papers_backup"
-            if papers_backup.exists():
-                shutil.rmtree(papers_backup)
-            shutil.move(str(papers_dir), str(papers_backup))
+    if not dxtr_dir.exists():
+        return
 
-        # Clear profile and other state
-        for item in dxtr_dir.iterdir():
-            if item.name != "hf_papers":
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
+    papers_dir = dxtr_dir / "hf_papers"
+    papers_backup = None
 
-        # Restore papers backup
-        if papers_backup and papers_backup.exists():
-            shutil.move(str(papers_backup), str(papers_dir))
+    if papers_dir.exists():
+        papers_backup = PROJECT_ROOT / ".dxtr_papers_backup"
+        if papers_backup.exists():
+            shutil.rmtree(papers_backup)
+        shutil.move(str(papers_dir), str(papers_backup))
+
+    for item in dxtr_dir.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+    if papers_backup and papers_backup.exists():
+        shutil.move(str(papers_backup), str(papers_dir))
 
     print("[Setup] Cleared .dxtr state (preserved papers)")
 
 
-class Tee:
-    """Helper to write to stdout and a file simultaneously."""
+class TranscriptLogger:
+    """Log to both stdout and file."""
     def __init__(self, filename):
         self.file = open(filename, "w", encoding="utf-8")
         self.stdout = sys.stdout
@@ -147,154 +137,128 @@ class Tee:
     def close(self):
         self.file.close()
 
-def run_with_pexpect():
-    """Run the eval using pexpect for automation."""
-    print("\n" + "=" * 60)
-    print("E2E JOURNEY EVALUATION (AUTOMATED)")
-    print("=" * 60 + "\n")
 
-    setup_eval_directory()
+def copy_profile_artifacts():
+    """Copy generated profile artifacts."""
+    dxtr_dir = PROJECT_ROOT / ".dxtr"
+    for artifact in ["github_summary.json", "dxtr_profile.md"]:
+        src = dxtr_dir / artifact
+        if src.exists():
+            shutil.copy(src, PROFILE_ARTIFACTS_DIR / artifact)
+            print(f"[Copied] {artifact}")
+
+
+def run_with_pexpect(papers_date: str, paper_count: int):
+    """Run the eval using pexpect."""
+    print("\n" + "=" * 60)
+    print("E2E JOURNEY EVALUATION")
+    print("=" * 60 + "\n")
+    print(f"[Papers] Using {paper_count} papers from {papers_date}")
+
+    setup_eval_directory(papers_date, paper_count)
     clear_dxtr_state()
 
-    captures = {}
+    user_journey = build_user_journey(papers_date)
+    logger = TranscriptLogger(TRANSCRIPT_FILE)
 
-    # Start dxtr chat
     print("[Starting] dxtr chat...")
-    
-    # Use Tee to capture everything to full_transcript.txt
-    logfile = Tee(TRANSCRIPT_FILE)
-    
+
     child = pexpect.spawn(
         "python", ["-m", "dxtr.cli", "chat"],
         cwd=str(PROJECT_ROOT),
         encoding="utf-8",
         timeout=300,
     )
-    child.logfile_read = logfile
+    child.logfile_read = logger
 
     try:
-        # Wait for initial greeting
         print("\n[Waiting] Initial greeting...")
-        child.expect(["profile", "Profile", "DXTR"], timeout=60)
+        child.expect([r"profile", r"Profile", r"DXTR", r"Hello"], timeout=60)
 
-        # Execute user journey
-        for i, step in enumerate(USER_JOURNEY):
+        for i, step in enumerate(user_journey):
             print(f"\n[Step {i+1}] {step['description']}")
 
-            # Send user input
-            user_input = step["say"]
-            # We don't need to print [You] here because child.logfile_read captures the echo
-            
-            child.sendline(user_input)
-
-            # Wait for expected response
-            timeout = step.get("timeout", 120)
-            wait_pattern = step["wait_for"]
-
             try:
-                child.expect(wait_pattern, timeout=timeout)
-                # Capture specific outputs - child.before contains everything since last expect (including tool output)
-                if "capture_as" in step:
-                    capture_name = step["capture_as"]
-                    response = clean_ansi(child.before) 
-                    captures[capture_name] = response
-                    print(f"[Captured] {capture_name} ({len(response)} chars)")
-
+                child.expect(r"You:", timeout=60)
             except pexpect.TIMEOUT:
-                print(f"[TIMEOUT] Waiting for: {wait_pattern}")
-                # Continue anyway
+                pass
 
+            time.sleep(0.5)
+            child.sendline(step["say"])
+
+            timeout = step.get("timeout", 120)
+            try:
+                child.expect(step["wait_for"], timeout=timeout)
+            except pexpect.TIMEOUT:
+                print(f"[TIMEOUT] Waiting for: {step['wait_for']}")
             except pexpect.EOF:
-                print("[EOF] Process ended unexpectedly")
+                print("[EOF] Process ended")
                 break
 
-        # Give time for final output
-        time.sleep(2)
+        # Wait for final response to complete
+        time.sleep(5)
+        try:
+            child.expect(r"You:", timeout=60)
+        except pexpect.TIMEOUT:
+            pass
 
     except Exception as e:
         print(f"\n[ERROR] {e}")
-
+        import traceback
+        traceback.print_exc()
     finally:
         child.close()
-        logfile.close()
+        logger.close()
 
-    # Save specific captures
-    save_outputs(captures)
+    copy_profile_artifacts()
 
     print("\n" + "=" * 60)
     print("EVALUATION COMPLETE")
     print("=" * 60)
     print(f"\nOutputs saved to: {DEBUG_DIR}")
-    print(f"  - full_transcript.txt")
-    print(f"  - rankings.txt")
-    print(f"  - recommendation.txt")
-    print(f"\nNext: Run LLM-as-a-judge evaluation")
-    print(f"  See: eval/llm_as_a_judge.md")
+    print("  - transcript.txt (full conversation)")
+    print("  - profile_artifacts/")
+    print("\nNext: Ask Claude to evaluate using eval/llm_as_a_judge.md")
 
 
-def run_manual():
-    """Provide manual instructions when pexpect is unavailable."""
+def run_manual(papers_date: str, paper_count: int):
+    """Manual instructions when pexpect unavailable."""
     print("\n" + "=" * 60)
     print("E2E JOURNEY EVALUATION (MANUAL)")
     print("=" * 60)
-    print("\npexpect not installed. Follow these manual steps:\n")
+    print(f"\n[Papers] Using {paper_count} papers from {papers_date}\n")
 
-    setup_eval_directory()
+    setup_eval_directory(papers_date, paper_count)
     clear_dxtr_state()
 
     print("1. Run: python -m dxtr.cli chat")
-    print("2. When DXTR asks for profile, say: ./profile.md")
-    print("3. Say 'yes' to summarize GitHub")
-    print("4. Say 'yes' to synthesize profile")
-    print("5. Say: rank today's papers for me")
-    print("6. Say 'yes' to download papers (if asked)")
-    print("7. Say 'yes' to proceed with ranking")
-    print(f"8. Copy ranking output to: {RANKINGS_FILE}")
-    print("9. Say: Based on the top 5 papers, which single paper would be")
+    print("2. When asked for profile: ./profile.md")
+    print("3. Say 'yes' to read profile")
+    print("4. Say 'yes' to summarize GitHub")
+    print("5. Say 'yes' to synthesize profile")
+    print(f"6. Say: rank the papers from {papers_date}")
+    print("7. Say 'yes' to rank papers")
+    print("8. Ask: Based on the top 5 papers, which single paper would be")
     print("   the absolute best for a side project given my profile?")
-    print(f"10. Copy recommendation to: {RECOMMENDATION_FILE}")
-    print("\nThen run LLM-as-a-judge evaluation.")
-    print("See: eval/llm_as_a_judge.md")
-
-
-def save_outputs(captures: dict):
-    """Save all captured outputs to files."""
-    # Full transcript is already saved by Tee
-
-    # Rankings
-    if "rankings" in captures:
-        RANKINGS_FILE.write_text(captures["rankings"])
-        print(f"[Saved] {RANKINGS_FILE}")
-    else:
-        RANKINGS_FILE.write_text("[No rankings captured - check transcript]")
-
-    # Recommendation
-    if "recommendation" in captures:
-        RECOMMENDATION_FILE.write_text(captures["recommendation"])
-        print(f"[Saved] {RECOMMENDATION_FILE}")
-    else:
-        RECOMMENDATION_FILE.write_text("[No recommendation captured - check transcript]")
-
-    # Copy profile artifacts if they were created
-    dxtr_dir = PROJECT_ROOT / ".dxtr"
-    artifacts = [
-        "github_summary.json",
-        "dxtr_profile.md",
-    ]
-    for artifact in artifacts:
-        src = dxtr_dir / artifact
-        if src.exists():
-            dst = PROFILE_ARTIFACTS_DIR / artifact
-            shutil.copy(src, dst)
-            print(f"[Copied] {artifact}")
+    print(f"\n9. Save transcript to: {TRANSCRIPT_FILE}")
+    print("\nThen ask Claude to evaluate using eval/llm_as_a_judge.md")
 
 
 def main():
-    """Main entry point."""
+    papers_date, paper_count = find_available_papers()
+
+    if papers_date is None:
+        print("\n" + "=" * 60)
+        print("ERROR: No papers found")
+        print("=" * 60)
+        print("\nDownload papers first:")
+        print("  python -m dxtr.cli get-papers")
+        sys.exit(1)
+
     if HAS_PEXPECT:
-        run_with_pexpect()
+        run_with_pexpect(papers_date, paper_count)
     else:
-        run_manual()
+        run_manual(papers_date, paper_count)
         print("\nTo enable automation: pip install pexpect")
 
 

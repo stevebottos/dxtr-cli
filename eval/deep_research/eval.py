@@ -48,12 +48,12 @@ TEST_CASES = [
     },
     {
         "paper_id": "2601.02314",
-        "query": "Given my background in multimodal LLMs and computer vision, which techniques from this paper could I apply to ensure my models aren't just producing post-hoc justifications?",
+        "query": "Which techniques from this paper could I apply to ensure my models aren't just producing post-hoc justifications? Focus on practical applications.",
         "tests": "profile-relevance, practical application",
         "ground_truth_points": [
             "counterfactual interventions",
             "Causal Sensitivity",
-            "multimodal or vision",
+            "practical application",
         ],
     },
     # === Paper 2601.01426: SWE-Lego ===
@@ -81,7 +81,7 @@ TEST_CASES = [
     },
     {
         "paper_id": "2601.01426",
-        "query": "I'm working with limited hardware (12GB VRAM). What aspects of this paper's approach could be relevant for training smaller models efficiently?",
+        "query": "What aspects of this paper's approach could be relevant for training smaller models efficiently on limited hardware?",
         "tests": "profile-relevance, hardware constraints",
         "ground_truth_points": [
             "8B model or Qwen3-8B",

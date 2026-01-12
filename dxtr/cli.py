@@ -1,15 +1,63 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import sys
+import re
 import time
 from pathlib import Path
-from datetime import datetime
 
 # Import new configuration and agents
 from dxtr.config_v2 import config
 from dxtr.agents.main.agent import MainAgent
 from dxtr.papers_etl import run_etl
+
+
+class ThinkTagFilter:
+    """Filter that strips <think>...</think> tags from streamed output."""
+
+    def __init__(self):
+        self.buffer = ""
+        self.in_think_block = False
+
+    def process(self, chunk: str) -> str:
+        """Process a chunk of text, filtering out think tags."""
+        self.buffer += chunk
+        output = ""
+
+        while True:
+            if self.in_think_block:
+                # Look for closing tag
+                end_idx = self.buffer.find("</think>")
+                if end_idx != -1:
+                    # Found end, discard everything up to and including </think>
+                    self.buffer = self.buffer[end_idx + 8:]
+                    self.in_think_block = False
+                else:
+                    # Still in think block, keep buffering
+                    break
+            else:
+                # Look for opening tag
+                start_idx = self.buffer.find("<think>")
+                if start_idx != -1:
+                    # Output everything before the tag
+                    output += self.buffer[:start_idx]
+                    self.buffer = self.buffer[start_idx + 7:]
+                    self.in_think_block = True
+                else:
+                    # No think tag found - but we might have partial "<think"
+                    # Keep last 6 chars in buffer in case it's a partial tag
+                    safe_len = max(0, len(self.buffer) - 6)
+                    output += self.buffer[:safe_len]
+                    self.buffer = self.buffer[safe_len:]
+                    break
+
+        return output
+
+    def flush(self) -> str:
+        """Flush any remaining buffered content."""
+        if self.in_think_block:
+            # Unclosed think block - discard
+            return ""
+        return self.buffer
 
 def _load_user_context() -> str:
     """Load user profile content if it exists."""
@@ -35,14 +83,23 @@ def _process_turn(agent, chat_history):
         response_generator = agent.chat(chat_history)
         full_response = ""
         tool_calls = []
+        think_filter = ThinkTagFilter()
 
         # Consume generator - now yields dicts with type and data
         for chunk in response_generator:
             if chunk["type"] == "content":
-                print(chunk["data"], end="", flush=True)
+                # Filter out <think> tags before printing
+                filtered = think_filter.process(chunk["data"])
+                if filtered:
+                    print(filtered, end="", flush=True)
                 full_response += chunk["data"]
             elif chunk["type"] == "tool_calls":
                 tool_calls = chunk["data"]
+
+        # Flush any remaining content
+        remaining = think_filter.flush()
+        if remaining:
+            print(remaining, end="", flush=True)
 
         print()  # Newline after response
 

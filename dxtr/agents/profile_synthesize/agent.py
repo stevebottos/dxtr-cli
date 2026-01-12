@@ -124,6 +124,23 @@ class Agent(BaseAgent):
         # Clean think tags if present
         clean_text = re.sub(r"<think>[\s\S]*?</think>", "", result).strip()
 
+        # Extract content from markdown code blocks if present
+        # The model sometimes wraps output in ```markdown ... ```
+        code_block_match = re.search(r"```markdown\s*([\s\S]*?)```", clean_text)
+        if code_block_match:
+            clean_text = code_block_match.group(1).strip()
+
+        # Handle duplicate profiles - take only the first complete profile
+        # Look for the pattern where "# User Profile" appears multiple times
+        if clean_text.count("# User Profile") > 1:
+            # Split on the header and take the first complete one
+            parts = re.split(r"(?=# User Profile)", clean_text)
+            # Take the first non-empty part that starts with # User Profile
+            for part in parts:
+                if part.strip().startswith("# User Profile"):
+                    clean_text = part.strip()
+                    break
+
         # Save to configured profile path
         output_file = config.paths.profile_file
         output_file.parent.mkdir(parents=True, exist_ok=True)

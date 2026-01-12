@@ -55,11 +55,14 @@ After running `eval/e2e_journey/run_eval.py`, artifacts are saved to `.dxtr_eval
 
 | File | Description |
 |------|-------------|
-| `full_transcript.txt` | Complete conversation log |
-| `rankings.txt` | Paper ranking output |
-| `recommendation.txt` | Best paper recommendation |
+| `transcript.txt` | Complete conversation log (contains rankings, recommendation, everything) |
 | `profile_artifacts/github_summary.json` | GitHub analysis |
 | `profile_artifacts/dxtr_profile.md` | Synthesized profile |
+
+The transcript contains the full conversation including:
+- Paper rankings (look for "Paper Rankings for" section)
+- Best paper recommendation (look for response to "best for a side project" question)
+- All DXTR responses and tool outputs
 
 ## Evaluation Criteria
 
@@ -99,7 +102,7 @@ After running `eval/e2e_journey/run_eval.py`, artifacts are saved to `.dxtr_eval
 
 ### 2. Paper Ranking Quality
 
-**Artifact:** `.dxtr_eval/debug/rankings.txt`
+**Artifact:** `.dxtr_eval/debug/transcript.txt` (look for "Paper Rankings for" section)
 
 | Criterion | Weight | Description |
 |-----------|--------|-------------|
@@ -109,22 +112,51 @@ After running `eval/e2e_journey/run_eval.py`, artifacts are saved to `.dxtr_eval
 | **Diversity** | 10% | Does ranking capture breadth of user interests? |
 | **Score Calibration** | 10% | Are scores distributed reasonably (not all 5s or all 1s)? |
 
+**CRITICAL: Cross-Reference Rankings Against Profile Priorities**
+
+You MUST explicitly verify rankings against the profile's stated priorities:
+
+1. **Extract HIGH PRIORITY topics from profile** (e.g., "Video Captioning", "Agentic LLMs", "Small Language Models")
+2. **Extract LOW PRIORITY topics from profile** (e.g., "Pure Image Classification", "Large-scale training 70B+")
+3. **For each HIGH PRIORITY topic:**
+   - Find papers that match this topic
+   - Verify they are ranked in top 10 (score 4.0+)
+   - **FLAG if a HIGH PRIORITY topic has no papers in top 10**
+4. **For each LOW PRIORITY topic:**
+   - Find papers that match this topic
+   - Verify they are ranked low (score < 3.0)
+   - **FLAG if LOW PRIORITY papers are ranked high**
+
+**Create a table like this:**
+
+| Profile Priority | Topic | Matching Papers | Ranked Position | Correct? |
+|------------------|-------|-----------------|-----------------|----------|
+| HIGH | [Topic from profile] | [Papers matching topic] | [Rank #] | ✅/❌ |
+| HIGH | [Topic from profile] | [Papers matching topic] | [Rank #] | ✅/❌ |
+| LOW | [Topic from profile] | [Papers matching topic] | [Rank #] | ✅/❌ |
+
+Example interpretation:
+- If a HIGH PRIORITY topic has no papers in top 10: ❌ Flag as issue
+- If a LOW PRIORITY topic has papers ranked high (4.0+): ❌ Flag as issue
+
 **Questions to answer:**
-- Do top-5 papers genuinely match the user's interests (CV, small LLMs, agentic systems, multimodal)?
+- Do top-5 papers genuinely match the user's stated HIGH PRIORITY interests?
 - Are low-ranked papers correctly identified as less relevant?
 - Does the reasoning cite specific aspects of papers and profile?
 - Are there any papers ranked high/low that seem miscategorized?
+- **Are any HIGH PRIORITY topics missing from the top 10?**
+- **Are any LOW PRIORITY topics incorrectly ranked high?**
 
 ---
 
 ### 3. Recommendation Quality
 
-**Artifact:** `.dxtr_eval/debug/recommendation.txt`
+**Artifact:** `.dxtr_eval/debug/transcript.txt` (look for response to "best for a side project" question)
 
 | Criterion | Weight | Description |
 |-----------|--------|-------------|
 | **Selection Justification** | 30% | Is the chosen paper well-justified vs alternatives? |
-| **Profile Matching** | 25% | Does selection account for user's constraints (12GB VRAM, side project focus)? |
+| **Profile Matching** | 25% | Does selection account for user's stated constraints (hardware limits, time, focus areas)? |
 | **Reasoning Depth** | 25% | Is the explanation detailed and actionable? |
 | **No Hallucinations** | 20% | Is paper description accurate? No fabricated claims? |
 
@@ -137,7 +169,7 @@ After running `eval/e2e_journey/run_eval.py`, artifacts are saved to `.dxtr_eval
 
 ### 4. Conversation Quality
 
-**Artifact:** `.dxtr_eval/debug/full_transcript.txt`
+**Artifact:** `.dxtr_eval/debug/transcript.txt`
 
 | Criterion | Weight | Description |
 |-----------|--------|-------------|
@@ -278,21 +310,19 @@ Then ask:
 
 ## Ground Truth References
 
-For paper ranking evaluation, compare against user's stated interests from `profile.md`:
+For paper ranking evaluation, compare against the user's stated interests from their `profile.md` and synthesized `dxtr_profile.md`:
 
-**High-relevance topics:**
-- Computer vision, especially few-shot applications
-- Small language models in production
-- Multimodal applications
-- Agentic LLM development best practices
-- Model architecture improvements
+**Extract from the profile:**
+1. **HIGH PRIORITY topics** - These should have papers ranked in top 10
+2. **LOW PRIORITY topics** - These should have papers ranked low
+3. **Constraints** - Hardware limits, time availability, preferences
+4. **Goals** - Immediate goals, career direction
 
-**User constraints:**
-- 12GB VRAM, 32GB RAM
-- Focused on practical side projects
-- Career goal: solutions architect + researcher hybrid
-
-Papers matching these criteria should rank highly. Papers on unrelated topics (e.g., pure NLP benchmarks, large-scale distributed training) should rank lower unless they have clear practical applications.
+**Validation rules:**
+- Papers matching HIGH PRIORITY topics should score 4.0+
+- Papers matching LOW PRIORITY topics should score < 3.0
+- Recommendations should respect stated constraints
+- Papers on unrelated topics should rank lower unless they have clear practical applications to user's goals
 
 ---
 
