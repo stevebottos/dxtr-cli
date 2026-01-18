@@ -1,12 +1,18 @@
-"""Profile synthesis agent - creates enriched user profiles from artifacts."""
-
 from pathlib import Path
 
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from agents.utils import model, load_system_prompt
+from dxtr import DXTR_DIR, load_system_prompt, profile_synthesizer
 
 
-SYSTEM_PROMPT = load_system_prompt(Path(__file__).parent / "system.md")
+class ProfileSynthesisDeps(BaseModel):
+    seed_profile: str = Field(description="User's self-description from their profile file")
+    github_summary: str = Field(description="JSON summary of analyzed GitHub repositories")
 
-profile_synthesis_agent = Agent(model, system_prompt=SYSTEM_PROMPT)
+
+agent = Agent(
+    profile_synthesizer,
+    system_prompt=load_system_prompt(Path(__file__).parent / "system.md"),
+    deps_type=ProfileSynthesisDeps,
+)

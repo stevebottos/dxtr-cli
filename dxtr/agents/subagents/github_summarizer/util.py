@@ -1,46 +1,38 @@
-"""
-GitHub utilities for profile synthesis.
-
-Pure Python functions for cloning repos and extracting information.
-"""
-
-import subprocess
 import re
-import shutil
-import urllib.request
+import urllib
 from pathlib import Path
+import subprocess
+import shutil
 
 
-def is_profile_url(url: str) -> bool:
-    """Check if a GitHub URL is a profile (not a repository)."""
-    pattern = r"github\.com/([^/]+)/?$"
-    return bool(re.search(pattern, url))
+def find_python_files(repo_path: Path, max_files: int = 100) -> list[Path]:
+    """Find all Python files in a repository."""
+    python_files = []
 
+    exclude_patterns = [
+        "*/test/*",
+        "*/tests/*",
+        "*/__pycache__/*",
+        "*/venv/*",
+        "*/env/*",
+        "*/.venv/*",
+        "*/node_modules/*",
+        "*/.git/*",
+        "*/dist/*",
+        "*/build/*",
+        "*/.pytest_cache/*",
+    ]
 
-def fetch_profile_html(url: str) -> str | None:
-    """Fetch raw HTML from a GitHub profile URL."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (DXTR Profile Agent)"}
-        req = urllib.request.Request(url, headers=headers)
+    for py_file in repo_path.rglob("*.py"):
+        if any(py_file.match(pattern) for pattern in exclude_patterns):
+            continue
 
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content_bytes = response.read()
-            content_type = response.headers.get("Content-Type", "")
+        python_files.append(py_file)
 
-            encoding = "utf-8"
-            if "charset=" in content_type:
-                encoding = content_type.split("charset=")[-1].split(";")[0].strip()
+        if len(python_files) >= max_files:
+            break
 
-            try:
-                html = content_bytes.decode(encoding)
-            except UnicodeDecodeError:
-                html = content_bytes.decode("utf-8", errors="ignore")
-
-            return html
-
-    except Exception as e:
-        print(f"  [Error fetching profile HTML: {e}]")
-        return None
+    return sorted(python_files)
 
 
 def extract_pinned_repos(html_content: str) -> list[str]:
@@ -177,31 +169,33 @@ def clone_repo(url: str, base_dir: Path) -> dict:
         }
 
 
-def find_python_files(repo_path: Path, max_files: int = 100) -> list[Path]:
-    """Find all Python files in a repository."""
-    python_files = []
+def fetch_profile_html(url: str) -> str | None:
+    """Fetch raw HTML from a GitHub profile URL."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (DXTR Profile Agent)"}
+        req = urllib.request.Request(url, headers=headers)
 
-    exclude_patterns = [
-        "*/test/*",
-        "*/tests/*",
-        "*/__pycache__/*",
-        "*/venv/*",
-        "*/env/*",
-        "*/.venv/*",
-        "*/node_modules/*",
-        "*/.git/*",
-        "*/dist/*",
-        "*/build/*",
-        "*/.pytest_cache/*",
-    ]
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content_bytes = response.read()
+            content_type = response.headers.get("Content-Type", "")
 
-    for py_file in repo_path.rglob("*.py"):
-        if any(py_file.match(pattern) for pattern in exclude_patterns):
-            continue
+            encoding = "utf-8"
+            if "charset=" in content_type:
+                encoding = content_type.split("charset=")[-1].split(";")[0].strip()
 
-        python_files.append(py_file)
+            try:
+                html = content_bytes.decode(encoding)
+            except UnicodeDecodeError:
+                html = content_bytes.decode("utf-8", errors="ignore")
 
-        if len(python_files) >= max_files:
-            break
+            return html
 
-    return sorted(python_files)
+    except Exception as e:
+        print(f"  [Error fetching profile HTML: {e}]")
+        return None
+
+
+def is_profile_url(url: str) -> bool:
+    """Check if a GitHub URL is a profile (not a repository)."""
+    pattern = r"github\.com/([^/]+)/?$"
+    return bool(re.search(pattern, url))
