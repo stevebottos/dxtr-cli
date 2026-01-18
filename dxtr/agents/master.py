@@ -3,14 +3,15 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from dxtr import DXTR_DIR, master, load_system_prompt, get_model_settings, run_agent
+from dxtr import DXTR_DIR, master, load_system_prompt, get_model_settings, run_agent, log_tool_usage
 from dxtr.agents.subagents import github_summarizer
 from dxtr.agents.subagents import profile_synthesis
 from dxtr.agents.subagents import papers_ranking
 from dxtr.agents.subagents.papers_ranking import util as papers_ranking_util
 from dxtr.agents.util import (
     get_available_dates,
-    download_papers,
+    fetch_papers_for_date,
+    download_papers as do_download_papers,
     load_papers_metadata,
     format_available_dates,
 )
@@ -46,9 +47,9 @@ class ProfileSynthesisRequest(BaseModel):
 
 
 @agent.tool_plain
+@log_tool_usage
 async def call_github_summarizer(request: GitHubProfileRequest) -> str:
     """Analyze a user's GitHub profile: clone pinned repos, read code, generate summary."""
-    print("Call: Github Summary Agent")
     result = await run_agent(
         github_summarizer.agent,
         "Analyze the user's GitHub profile.",
@@ -59,6 +60,7 @@ async def call_github_summarizer(request: GitHubProfileRequest) -> str:
 
 
 @agent.tool_plain
+@log_tool_usage
 async def read_file(request: FileReadRequest) -> str:
     """Read content from a file."""
     try:
@@ -71,10 +73,10 @@ async def read_file(request: FileReadRequest) -> str:
 
 
 @agent.tool_plain
+@log_tool_usage
 async def call_profile_synthesizer(request: ProfileSynthesisRequest) -> str:
     """Synthesize an enriched user profile from seed profile and GitHub analysis.
     If the user has provided a github profile, you need to handle that first."""
-    print("Call: Profile Synthesis Agent")
     deps = profile_synthesis.ProfileSynthesisDeps(
         seed_profile=request.seed_profile,
         github_summary=request.github_summary,
@@ -98,6 +100,7 @@ async def call_profile_synthesizer(request: ProfileSynthesisRequest) -> str:
 
 
 @agent.tool_plain
+@log_tool_usage
 async def get_today() -> str:
     """Get today's date in YYYY-MM-DD format."""
     from datetime import datetime
@@ -105,6 +108,7 @@ async def get_today() -> str:
 
 
 @agent.tool_plain
+@log_tool_usage
 async def check_profile_state() -> str:
     """Check the current state of the user's DXTR profile directory.
 
@@ -115,8 +119,6 @@ async def check_profile_state() -> str:
 
     Use this to determine what work needs to be done (e.g., profile synthesis).
     """
-    print("Call: check_profile_state")
-
     lines = [f"DXTR directory: {DXTR_DIR}", ""]
 
     # Check synthesized profile
@@ -171,14 +173,21 @@ class GetPapersRequest(BaseModel):
     )
 
 
+class FetchPapersRequest(BaseModel):
+    date: str = Field(
+        description="Date to fetch papers for (format: YYYY-MM-DD).",
+        examples=["2024-01-15"],
+    )
+
+
 class DownloadPapersRequest(BaseModel):
-    dates: list[str] = Field(
-        description="List of dates to download papers for (format: YYYY-MM-DD).",
-        examples=[["2024-01-15"], ["2024-01-14", "2024-01-15"]],
+    date: str = Field(
+        description="Date to download papers for (format: YYYY-MM-DD).",
+        examples=["2024-01-15"],
     )
     paper_ids: list[str] | None = Field(
         default=None,
-        description="Optional list of specific paper IDs to download. If None, downloads all papers for the dates.",
+        description="Optional list of specific paper IDs to download. If None, downloads all papers for the date.",
     )
 
 
@@ -190,51 +199,69 @@ class RankPapersRequest(BaseModel):
 
 
 @agent.tool_plain
+@log_tool_usage
 async def get_papers(request: GetPapersRequest) -> str:
     """Check available papers from the past week.
 
     Returns a summary of dates and paper counts. Use this to see what papers
     are already downloaded before asking the user to select dates.
     """
-    print("Call: get_papers")
     available = get_available_dates(days_back=request.days_back)
     return format_available_dates(available)
 
 
 @agent.tool_plain
-async def fetch_and_download_papers(request: DownloadPapersRequest) -> str:
-    """Download papers for specified dates from HuggingFace/ArXiv.
+@log_tool_usage
+async def fetch_papers(request: FetchPapersRequest) -> str:
+    """Fetch paper metadata from HuggingFace for a date (does NOT download).
 
-    Downloads paper metadata (and optionally PDFs) for the given dates.
-    Use this after confirming with the user which dates to download.
+    Use this to see what papers are available on HuggingFace for a given date.
+    Returns paper titles and IDs. Does not save anything to disk.
     """
-    print(f"Call: fetch_and_download_papers for {request.dates}")
+    papers = fetch_papers_for_date(request.date)
 
-    total_downloaded = 0
-    results = []
+    if not papers:
+        return f"No papers found on HuggingFace for {request.date}"
 
-    for date in request.dates:
-        downloaded = download_papers(
-            date=date,
-            paper_ids=request.paper_ids,
-            download_pdfs=False,  # Per CLAUDE.md - Gemini handles PDFs directly
-        )
-        count = len(downloaded)
-        total_downloaded += count
-        results.append(f"{date}: {count} papers")
+    lines = [f"Found {len(papers)} papers for {request.date}:\n"]
+    for p in papers[:20]:  # Limit to first 20 for readability
+        lines.append(f"  - [{p['id']}] {p['title'][:60]}...")
 
-    return (
-        f"Downloaded papers for {len(request.dates)} dates:\n"
-        + "\n".join(f"  - {r}" for r in results)
-        + f"\n\nTotal: {total_downloaded} papers"
-    )
+    if len(papers) > 20:
+        lines.append(f"\n  ... and {len(papers) - 20} more")
+
+    return "\n".join(lines)
 
 
 @agent.tool_plain
-async def rank_papers(request: RankPapersRequest) -> str:
-    """Rank papers for a date against the user's synthesized profile."""
-    print(f"Call: rank_papers for {request.date}")
+@log_tool_usage
+async def download_papers(request: DownloadPapersRequest) -> str:
+    """Download papers from HuggingFace to local disk.
 
+    Saves paper metadata to ~/.dxtr/papers/{date}/. Only use this if
+    get_papers shows the papers aren't already downloaded.
+
+    PREREQUISITE: Call get_papers first to check what's already on disk.
+    """
+    downloaded = do_download_papers(
+        date=request.date,
+        paper_ids=request.paper_ids,
+        download_pdfs=False,
+    )
+
+    if not downloaded:
+        return f"No papers downloaded for {request.date}"
+
+    return f"Downloaded {len(downloaded)} papers for {request.date}"
+
+
+@agent.tool_plain
+@log_tool_usage
+async def rank_papers(request: RankPapersRequest) -> str:
+    """Rank papers for a date against the user's synthesized profile.
+
+    PREREQUISITE: Call get_papers first to verify papers are downloaded.
+    """
     # Load user profile
     profile = papers_ranking_util.load_profile()
     if "No synthesized profile found" in profile:
@@ -243,7 +270,7 @@ async def rank_papers(request: RankPapersRequest) -> str:
     # Load papers and convert to dict
     papers_list = load_papers_metadata(request.date)
     if not papers_list:
-        return f"No papers found for {request.date}. Use fetch_and_download_papers first."
+        return f"No papers found for {request.date}. Use download_papers first."
 
     papers_dict = papers_ranking_util.papers_list_to_dict(papers_list)
 

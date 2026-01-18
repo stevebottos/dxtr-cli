@@ -1,5 +1,7 @@
 from pathlib import Path
 from contextvars import ContextVar
+from functools import wraps
+import asyncio
 import os
 
 from pydantic_ai_litellm import LiteLLMModel
@@ -39,6 +41,50 @@ def get_model_settings() -> dict:
     return {}
 
 
+# === Event Bus ===
+# Per-request queue for streaming events to clients
+_event_queue: ContextVar[asyncio.Queue | None] = ContextVar("event_queue", default=None)
+
+
+def create_event_queue(maxsize: int = 100) -> asyncio.Queue:
+    """Create and set a new event queue for the current request context."""
+    queue = asyncio.Queue(maxsize=maxsize)
+    _event_queue.set(queue)
+    return queue
+
+
+def get_event_queue() -> asyncio.Queue | None:
+    """Get the event queue for the current context (if any)."""
+    return _event_queue.get()
+
+
+def clear_event_queue() -> None:
+    """Clear the event queue from the current context."""
+    _event_queue.set(None)
+
+
+def publish(event_type: str, message: str) -> None:
+    """Publish an event to the bus.
+
+    Args:
+        event_type: Event type (e.g., "tool", "progress", "status", "error")
+        message: Human-readable message
+
+    Events are added to the current request's queue (if one exists) and
+    always printed to stdout for server logs.
+    """
+    # Always log to stdout
+    print(f"[{event_type.upper()}] {message}", flush=True)
+
+    # Push to queue if one exists for this request
+    queue = _event_queue.get()
+    if queue is not None:
+        try:
+            queue.put_nowait({"type": event_type, "message": message})
+        except asyncio.QueueFull:
+            print(f"[WARN] Event queue full, dropping: {event_type}", flush=True)
+
+
 def load_system_prompt(file_path: Path) -> str:
     """Load a system prompt from a markdown file."""
     return file_path.read_text().strip()
@@ -71,3 +117,54 @@ async def run_agent(agent, prompt: str, **kwargs):
 
     print(f"\n{'='*60}\n")
     return StreamResult(output, stream)
+
+
+def log_tool_usage(func):
+    """Decorator that logs when a tool function is called.
+
+    Works with both sync and async functions. Publishes to the event bus
+    when the tool is invoked to improve visibility.
+
+    Usage:
+        @agent.tool_plain
+        @log_tool_usage
+        async def my_tool(request: MyRequest) -> str:
+            ...
+    """
+    @wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        publish("tool", f"{func.__name__} called")
+        return await func(*args, **kwargs)
+
+    @wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        publish("tool", f"{func.__name__} called")
+        return func(*args, **kwargs)
+
+    if asyncio.iscoroutinefunction(func):
+        return async_wrapper
+    return sync_wrapper
+
+
+def requires(*tool_names: str):
+    """Decorator that documents prerequisite tools in the docstring.
+
+    The model will see "PREREQUISITE: Call X first" in the tool description,
+    guiding it to check state before calling this tool.
+
+    Usage:
+        @agent.tool_plain
+        @requires("get_papers")
+        async def fetch_and_download_papers(...):
+            ...
+    """
+    def decorator(func):
+        prereq_list = ", ".join(tool_names)
+        prereq_text = f"\n\nPREREQUISITE: Call {prereq_list} first."
+
+        # Augment docstring
+        original_doc = func.__doc__ or ""
+        func.__doc__ = original_doc.rstrip() + prereq_text
+
+        return func
+    return decorator
